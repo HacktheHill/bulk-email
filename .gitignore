@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.csv
+.env
+src/test_data/
