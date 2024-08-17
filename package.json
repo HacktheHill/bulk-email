@@ -2,16 +2,16 @@
 	"$schema": "https://json.schemastore.org/package",
 	"name": "bulk-email",
 	"description": "Send bulk emails using nodemailer",
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"main": "dist/app.js",
 	"module": "dist/app.js",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/HacktheHill/bulk-gmail"
+		"url": "https://github.com/HacktheHill/bulk-email"
 	},
 	"license": "MIT",
 	"bugs": {
-		"url": "https://github.com/HacktheHill/bulk-gmail/issues"
+		"url": "https://github.com/HacktheHill/bulk-email/issues"
 	},
 	"keywords": [
 		"bulk",
