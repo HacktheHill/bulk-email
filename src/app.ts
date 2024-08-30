@@ -113,7 +113,7 @@ if (!languageResult.success) {
 
 // Create a parser
 const csvParser = csv({
-	headers: ["name", "email", "language"],
+	headers: ["name", "email", "language", "id"],
 	trim: true,
 });
 
@@ -129,6 +129,7 @@ csvParser.subscribe(row => {
 			name: z.string().min(1),
 			email: z.string().email(),
 			language: z.union([z.literal("en"), z.literal("fr")]),
+			id: z.string().optional(),
 		})
 		.safeParse(row);
 
@@ -137,14 +138,14 @@ csvParser.subscribe(row => {
 		process.exit(-1);
 	}
 
-	const {  name, email, language } = schema.data;
+	const { name, email, language, id } = schema.data;
 
-	const data = { ...languageData[language], name, email };
+	const data = { ...languageData[language], name, email, language, id };
 
 	// Add the message to the queue
 	messages.push({
 		to: email,
-		subject: subject,
+		subject: languageData[language]?.meta?.subject,
 		text: templates.text(data).replace(/<\/?[^>]+(>|$)/g, ""),
 		html: templates.html(data),
 		list: {
