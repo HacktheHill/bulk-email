@@ -150,10 +150,6 @@ csvParser.subscribe(row => {
 		html: templates.html(data),
 		list: {
 			...(languageData[language]?.meta ?? {}),
-			/* unsubscribe: {
-				...(languageData[language].meta?.unsubscribe ?? {}),
-				url: languageData[language].meta?.unsubscribe?.url?.replace("{{email}}", email) ?? "",
-			}, */
 		},
 	} as Mail.Options);
 });
