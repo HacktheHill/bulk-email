@@ -20,7 +20,6 @@ let { dev, templateDir, template, file, from } = program
 	.option("-t, --template <template>", "The template to send")
 	.option("-c, --file <file>", "The CSV file to read")
 	.option("-f, --from <from>", "The email address to send from")
-	.option("-s, --subject <subject>", "The subject of the email")
 	.parse()
 	.opts();
 dev ??= env.NODE_ENV === "development";
@@ -99,19 +98,17 @@ try {
 	throw new Error(`Failed to read the language data: ${err}`);
 }
 
-// Ask for the subject
-const subject = (
-	await inquirer.prompt<{ subject: string }>({
-		name: "subject",
-		type: "input",
-		message: "Enter the subject of the email",
-		default: languageData.meta?.subject,
-	})
-)?.subject;
-
-// Validate the subject
-if (!subject || !z.string().min(1).safeParse(subject).success) {
-	throw new Error("Please specify a subject for the email");
+// Validate the language data
+const languageSchema = z.record(
+	z.object({
+		meta: z.object({
+			subject: z.string(),
+		}),
+	}),
+);
+const languageResult = languageSchema.safeParse(languageData);
+if (!languageResult.success) {
+	throw new Error(`Invalid language data: ${languageResult.error}`);
 }
 
 // Create a parser
