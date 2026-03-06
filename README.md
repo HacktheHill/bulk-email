@@ -1,84 +1,136 @@
 # Bulk Email
 
-Bulk Email is a CLI tool designed for sending bulk emails. It reads from a CSV file containing a list of recipients and uses a directory of Handlebars email templates to send personalized emails to each recipient.
+Bulk Email is a CLI for sending personalized campaigns using React Email templates and AWS SES v2.
+It reads recipients from CSV, renders each row into HTML + text, sends in controlled batches, and retries transient SES failures with exponential backoff.
 
 ## Usage
 
-You can send emails using the `npx bulk-email` command. The CLI will prompt you to select an email template, provide the path to the CSV file containing the list of recipients, and enter the email credentials. The CSV file should have the following columns:
+Run the CLI with:
 
-- `name`: The name of the recipient
-- `email`: The email address of the recipient
-- `language`: The language preference of the recipient (`en` or `fr`)
+```bash
+npx tsx src/app.ts
+```
 
-The email templates directory should contain folders for each template. Inside each folder, there should be a `text.hbs` file for the plain text version of the email and a `html.hbs` file for the HTML version. The email templates are written in Handlebars and are compiled using the language data from the corresponding `language.json` file, along with the `name` and `email` variables for the recipient's information.
+You can also pass options directly:
 
-The `language.json` file can also include `from`, `subject`, and `meta` keys. The `meta` key will be parsed as email List headers.
+```bash
+npx tsx src/app.ts \
+    --template-dir templates \
+    --template uosu.tsx \
+    --file emails.csv \
+    --from campaign@example.com \
+    --from-name "Campaign Team" \
+    --subject "Voting closes tonight" \
+    --region us-east-1 \
+    --unsubscribe-base-url "https://vote.danielthorp.com/unsubscribe" \
+    --unsubscribe-secret "replace-with-long-random-secret" \
+    --batch-size 10 \
+    --batch-delay-ms 1200 \
+    --max-attempts 5 \
+    --base-delay-ms 500
+```
 
-### Example `language.json` File
+## Required AWS Setup
 
-```jsonc
-{
-    "en": {
-        "from": "Your name",
-        "subject": "Subject here",
-        "greeting": "Hello",
-        "message": [
-            "This is a message",
-            "It has multiple lines"
-        ],
-        "signature": "Your signature",
-        "closing": "Your name",
-        "unsubscribe": "Unsubscribe",
-        "meta": {
-            "help": "admin@example.com?subject=Help with mailing list",
-            "unsubscribe": {
-                "url": "https://example.com/unsubscribe?email={{email}}",
-                "comment": "Unsubscribe from further emails"
-            },
-            "id": {
-                "url": "https://example.com",
-                "comment": "2023 mailing list"
-            }
-        }
-    },
-    "fr": {
-        "from": "Votre nom",
-        "subject": "Sujet ici",
-        // Similar structure as the English version
-    }
+1. Use an IAM principal with SES permissions, at minimum `ses:SendEmail`.
+2. Set AWS credentials using standard AWS SDK resolution (env vars, shared config, role, etc.).
+3. Set your SES region (`AWS_REGION` or `--region`).
+4. Verify the sender identity in SES (`--from`).
+5. If your account is in SES sandbox, you must verify recipient addresses too.
+
+## Template Format (React Email)
+
+Templates live as files in `templates/` and must export a default React component.
+The CLI passes the full CSV row as props to the component.
+Templates can also export `subject` to define a campaign-wide subject line.
+
+Example template:
+
+```tsx
+import { Html, Body, Text } from "@react-email/components";
+import * as React from "react";
+
+type Props = {
+    name?: string;
+};
+
+export const subject = "Campaign update";
+
+export default function ExampleEmail({ name = "friend" }: Props) {
+    return (
+        <Html>
+            <Body>
+                <Text>Hello {name}, this is your campaign update.</Text>
+            </Body>
+        </Html>
+    );
 }
 ```
 
-### Example `text.hbs` File
+Placeholders like `{{name}}` are replaced using CSV values in template subject and rendered HTML.
 
-```handlebars
-{{greeting}}, {{name}}!
+## CSV Format
 
-{{#each message as |paragraph|}}
-    {{paragraph}}
-{{/each}}
+Required column:
 
-{{signature}}
+- `email`
 
-{{closing}}
+Common optional columns:
 
-{{unsubscribe}}: https://example.com/unsubscribe?email={{email}}
-```
+- `name`
+- `language`
+- `subject` (used only when template and CLI subject are not provided)
 
-### Example `html.hbs` File
+Any additional columns are passed into template props.
 
-```handlebars
-<p>{{greeting}}, {{name}}!</p>
+## Retry + Batching Behavior
 
-{{#each message as |paragraph|}}
-    <p>{{paragraph}}</p>
-{{/each}}
+- Emails are sent in batches (`--batch-size`).
+- The CLI waits between batches (`--batch-delay-ms`).
+- Retryable SES errors (throttling/5xx/transient) are retried with exponential backoff and jitter.
+- Per-recipient retries are bounded by `--max-attempts`.
 
-<p>{{signature}}</p>
+## Configuration
 
-<p>{{closing}}</p>
+Environment variables:
 
-<a href="https://example.com/unsubscribe?email={{email}}">{{unsubscribe}}</a>
+- `AWS_REGION`
+- `EMAIL_FROM`
+- `EMAIL_FROM_NAME`
+- `EMAIL_SUBJECT`
+- `SES_CONFIGURATION_SET` (optional)
+- `UNSUBSCRIBE_BASE_URL` (optional, requires `UNSUBSCRIBE_SECRET`)
+- `UNSUBSCRIBE_SECRET` (optional, requires `UNSUBSCRIBE_BASE_URL`)
+- `UNSUBSCRIBE_URL` (optional static fallback URL if not using tokens)
+- `BATCH_SIZE` (default: `10`)
+- `BATCH_DELAY_MS` (default: `1200`)
+- `MAX_ATTEMPTS` (default: `5`)
+- `BASE_DELAY_MS` (default: `500`)
+
+CLI flags override environment values.
+
+## Unsubscribe Tokens
+
+When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generates a per-recipient URL:
+
+`https://vote.danielthorp.com/unsubscribe?t=<signed-token>`
+
+The same URL is used in `List-Unsubscribe` headers and exposed to templates as `unsubscribeUrl`.
+Token format is `<payload_b64url>.<hmac_sha256_signature_b64url>` where payload is JSON containing recipient email and issue time.
+
+## Best Practices
+
+1. Use SES configuration sets + CloudWatch/Kinesis/SNS event destinations for delivery, bounce, and complaint tracking.
+2. Always include both HTML and text bodies (this CLI does).
+3. Maintain suppression handling (global and account-level suppression lists).
+4. Warm up gradually: start with smaller batch sizes and increase as reputation stabilizes.
+5. Keep retry bounded and only for transient errors to avoid duplicate-send amplification.
+
+## Scripts
+
+```bash
+npm run start
+npm run build
 ```
 
 ## License
