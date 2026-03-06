@@ -24,6 +24,9 @@ npx tsx src/app.ts \
     --region us-east-1 \
     --unsubscribe-base-url "https://vote.danielthorp.com/unsubscribe" \
     --unsubscribe-secret "replace-with-long-random-secret" \
+    --max-per-second 14 \
+    --sent-log-file .sent-emails.jsonl \
+    --concurrency 25 \
     --batch-size 10 \
     --batch-delay-ms 1200 \
     --max-attempts 5 \
@@ -86,9 +89,12 @@ Any additional columns are passed into template props.
 ## Retry + Batching Behavior
 
 - Emails are sent in batches (`--batch-size`).
+- Sends inside each batch are concurrency-limited (`--concurrency`).
+- SES attempts are globally rate-limited (`--max-per-second`).
 - The CLI waits between batches (`--batch-delay-ms`).
 - Retryable SES errors (throttling/5xx/transient) are retried with exponential backoff and jitter.
 - Per-recipient retries are bounded by `--max-attempts`.
+- Successful sends are checkpointed to `--sent-log-file` and skipped on reruns.
 
 ## Configuration
 
@@ -102,6 +108,11 @@ Environment variables:
 - `UNSUBSCRIBE_BASE_URL` (optional, requires `UNSUBSCRIBE_SECRET`)
 - `UNSUBSCRIBE_SECRET` (optional, requires `UNSUBSCRIBE_BASE_URL`)
 - `UNSUBSCRIBE_URL` (optional static fallback URL if not using tokens)
+- `SUPPRESSION_CHECK_URL` (required)
+- `SUPPRESSION_CHECK_TOKEN` (required)
+- `SES_MAX_PER_SECOND` (default: `14`)
+- `SENT_LOG_FILE` (default: `.sent-emails.jsonl`)
+- `SEND_CONCURRENCY` (default: `25`)
 - `BATCH_SIZE` (default: `10`)
 - `BATCH_DELAY_MS` (default: `1200`)
 - `MAX_ATTEMPTS` (default: `5`)
@@ -117,6 +128,49 @@ When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generat
 
 The same URL is used in `List-Unsubscribe` headers and exposed to templates as `unsubscribeUrl`.
 Token format is `<payload_b64url>.<hmac_sha256_signature_b64url>` where payload is JSON containing recipient email and issue time.
+
+Quick verification for a generated token:
+
+```bash
+npm run verify-unsub-token -- \
+    --url "https://vote.danielthorp.com/unsubscribe?t=<token>" \
+    --secret "your-unsubscribe-secret"
+```
+
+Or pass token directly:
+
+```bash
+npm run verify-unsub-token -- --token "<payload>.<signature>" --secret "your-unsubscribe-secret"
+```
+
+For the Cloudflare Worker project, set the Worker secret with Wrangler (do not store in `wrangler.jsonc`):
+
+```bash
+cd workers/unsubscribe-worker
+npx wrangler secret put UOSU_UNSUBSCRIBE_TOKEN_SECRET
+npx wrangler secret put UOSU_SUPPRESSION_READ_TOKEN
+```
+
+## Suppression Sync
+
+The sender always fetches suppressed emails once at startup and skips them locally during the send.
+This avoids one HTTP call per recipient.
+
+Expected endpoint response shape:
+
+```json
+{
+    "emails": ["user1@example.com", "user2@example.com"],
+    "cursor": "optional-pagination-cursor",
+    "done": true
+}
+```
+
+The sender requests pages from:
+
+`GET <SUPPRESSION_CHECK_URL>?suppressed=1&limit=1000&cursor=<optional>`
+
+with `Authorization: Bearer <SUPPRESSION_CHECK_TOKEN>`.
 
 ## Best Practices
 

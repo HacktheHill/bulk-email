@@ -45,6 +45,11 @@ let {
 	unsubscribeBaseUrl,
 	unsubscribeSecret,
 	unsubscribeUrl,
+	suppressionCheckUrl,
+	suppressionCheckToken,
+	maxPerSecond,
+	sentLogFile,
+	concurrency,
 	batchSize,
 	batchDelayMs,
 	maxAttempts,
@@ -65,6 +70,17 @@ let {
 	)
 	.option("--unsubscribe-secret <unsubscribeSecret>", "Secret used to sign unsubscribe tokens")
 	.option("--unsubscribe-url <unsubscribeUrl>", "URL for List-Unsubscribe header (RFC 8058)")
+	.option(
+		"--suppression-check-url <suppressionCheckUrl>",
+		"Authenticated URL used to sync suppression list (required)",
+	)
+	.option(
+		"--suppression-check-token <suppressionCheckToken>",
+		"Bearer token used for suppression sync endpoint authorization (required)",
+	)
+	.option("--max-per-second <maxPerSecond>", "Maximum SES send attempts per second", Number)
+	.option("--sent-log-file <sentLogFile>", "Path to JSONL file tracking successful sends")
+	.option("--concurrency <concurrency>", "Maximum concurrent sends per batch", Number)
 	.option("--batch-size <batchSize>", "How many emails to send per batch", Number)
 	.option("--batch-delay-ms <batchDelayMs>", "Delay between batches in milliseconds", Number)
 	.option("--max-attempts <maxAttempts>", "Retry attempts per email", Number)
@@ -79,6 +95,11 @@ fromName ??= env.EMAIL_FROM_NAME;
 unsubscribeBaseUrl ??= env.UNSUBSCRIBE_BASE_URL;
 unsubscribeSecret ??= env.UNSUBSCRIBE_SECRET;
 unsubscribeUrl ??= env.UNSUBSCRIBE_URL;
+suppressionCheckUrl ??= env.SUPPRESSION_CHECK_URL;
+suppressionCheckToken ??= env.SUPPRESSION_CHECK_TOKEN;
+maxPerSecond ??= Number(env.SES_MAX_PER_SECOND ?? 14);
+sentLogFile ??= env.SENT_LOG_FILE ?? ".sent-emails.jsonl";
+concurrency ??= Number(env.SEND_CONCURRENCY ?? 25);
 batchSize ??= Number(env.BATCH_SIZE ?? 10);
 batchDelayMs ??= Number(env.BATCH_DELAY_MS ?? 1200);
 maxAttempts ??= Number(env.MAX_ATTEMPTS ?? 5);
@@ -135,15 +156,22 @@ if (!file || !(await fs.pathExists(file)) || !z.string().endsWith(".csv").safePa
 	throw new Error("Please specify a CSV file to read");
 }
 
-// Ask for the email address to send from
-from ??= (
-	await inquirer.prompt<{ from: string }>({
-		name: "from",
-		type: "input",
-		message: "Enter the email address to send from",
-		default: env.EMAIL_FROM,
-	})
-)?.from;
+// Ask only if sender address is not provided via CLI/env.
+if (!from) {
+	const envFrom = env.EMAIL_FROM;
+	if (envFrom && z.string().email().safeParse(envFrom).success) {
+		from = envFrom;
+	} else {
+		from = (
+			await inquirer.prompt<{ from: string }>({
+				name: "from",
+				type: "input",
+				message: "Enter the email address to send from",
+				default: env.EMAIL_FROM,
+			})
+		)?.from;
+	}
+}
 // Validate the email address to send from
 if (!from || !z.string().email().safeParse(from).success) {
 	throw new Error("Please specify an email address to send from");
@@ -169,6 +197,14 @@ if (!Number.isFinite(baseDelayMs) || baseDelayMs <= 0) {
 	throw new Error("base-delay-ms must be a positive number");
 }
 
+if (!Number.isFinite(maxPerSecond) || maxPerSecond <= 0) {
+	throw new Error("max-per-second must be a positive number");
+}
+
+if (!Number.isFinite(concurrency) || concurrency <= 0) {
+	throw new Error("concurrency must be a positive number");
+}
+
 if ((unsubscribeBaseUrl && !unsubscribeSecret) || (!unsubscribeBaseUrl && unsubscribeSecret)) {
 	throw new Error(
 		"When using tokenized unsubscribe, both --unsubscribe-base-url and --unsubscribe-secret are required",
@@ -187,6 +223,17 @@ if (unsubscribeUrl) {
 	if (!parsed.success) {
 		throw new Error("unsubscribe-url must be a valid URL");
 	}
+}
+
+if (!suppressionCheckUrl || !suppressionCheckToken) {
+	throw new Error(
+		"Suppression sync is required. Set both --suppression-check-url and --suppression-check-token (or SUPPRESSION_CHECK_URL and SUPPRESSION_CHECK_TOKEN)",
+	);
+}
+
+const suppressionUrlResult = z.string().url().safeParse(suppressionCheckUrl);
+if (!suppressionUrlResult.success) {
+	throw new Error("suppression-check-url must be a valid URL");
 }
 
 const templateModule = (await import(pathToFileURL(templatePath).toString())) as TemplateModule;
@@ -227,21 +274,50 @@ if (recipients.length === 0) {
 	process.exit(0);
 }
 
-console.info(`Sending ${recipients.length} message(s) to AWS SES in batches of ${batchSize}...`);
+const alreadySentEmails = await loadSentEmailSet(sentLogFile);
+console.info(`Loaded ${alreadySentEmails.size} already-sent address(es) from ${sentLogFile}.`);
+
+console.info("Syncing suppression list...");
+const suppressedEmails = await fetchSuppressedEmailSet({
+	endpointUrl: suppressionCheckUrl,
+	bearerToken: suppressionCheckToken,
+});
+console.info(`Suppression sync complete. Loaded ${suppressedEmails.size} suppressed address(es).`);
+
+const rateLimiter = createPerSecondRateLimiter(maxPerSecond);
+
+console.info(
+	`Sending ${recipients.length} message(s) to AWS SES in batches of ${batchSize} with concurrency ${concurrency} and max ${maxPerSecond}/sec...`,
+);
 
 let sent = 0;
+let skippedAlreadySent = 0;
+let skippedSuppressed = 0;
 const failures: Array<{ email: string; reason: string }> = [];
 for (let i = 0; i < recipients.length; i += batchSize) {
 	const batch = recipients.slice(i, i + batchSize);
-	await Promise.all(
-		batch.map(async recipient => {
+	await processWithConcurrency(batch, concurrency, async recipient => {
+			const recipientEmail = String(recipient.email);
+			const normalizedRecipientEmail = recipientEmail.trim().toLowerCase();
+
+			if (alreadySentEmails.has(normalizedRecipientEmail)) {
+				skippedAlreadySent++;
+				return;
+			}
+
+			if (suppressedEmails.has(normalizedRecipientEmail)) {
+				skippedSuppressed++;
+				console.info(`Skipping suppressed recipient: ${recipientEmail}`);
+				return;
+			}
+
 			const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
 			const rawSubject = templateSubject ?? subject ?? rowSubject;
 			const messageSubject = rawSubject ? applyPlaceholders(rawSubject, recipient) : undefined;
 			const generatedUnsubscribeUrl = buildRecipientUnsubscribeUrl({
 				baseUrl: unsubscribeBaseUrl,
 				secret: unsubscribeSecret,
-				email: String(recipient.email),
+				email: recipientEmail,
 				staticUrl: unsubscribeUrl,
 			});
 			const recipientWithComputedUrls = generatedUnsubscribeUrl
@@ -250,14 +326,14 @@ for (let i = 0; i < recipients.length; i += batchSize) {
 
 			if (!messageSubject) {
 				failures.push({
-					email: String(recipient.email),
+					email: recipientEmail,
 					reason: 'Missing subject. Add `export const subject = "..."` to template, set --subject, or add subject column',
 				});
 				return;
 			}
 
 			try {
-				await sendWithRetry({
+				const messageId = await sendWithRetry({
 					ses,
 					from,
 					fromName,
@@ -267,15 +343,22 @@ for (let i = 0; i < recipients.length; i += batchSize) {
 					maxAttempts,
 					baseDelayMs,
 					configurationSet,
+					rateLimiter,
 					unsubscribeUrl: generatedUnsubscribeUrl,
+				});
+
+				alreadySentEmails.add(normalizedRecipientEmail);
+				await appendSentRecord(sentLogFile, {
+					email: normalizedRecipientEmail,
+					messageId,
+					timestamp: new Date().toISOString(),
 				});
 				sent++;
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error);
-				failures.push({ email: String(recipient.email), reason });
+				failures.push({ email: recipientEmail, reason });
 			}
-		}),
-	);
+		});
 
 	const nextStart = i + batch.length;
 	if (nextStart < recipients.length && batchDelayMs > 0) {
@@ -286,7 +369,9 @@ for (let i = 0; i < recipients.length; i += batchSize) {
 	}
 }
 
-console.info(`Done. Sent: ${sent}, Failed: ${failures.length}`);
+console.info(
+	`Done. Sent: ${sent}, Already-sent skipped: ${skippedAlreadySent}, Suppressed skipped: ${skippedSuppressed}, Failed: ${failures.length}`,
+);
 if (failures.length > 0) {
 	for (const failure of failures) {
 		console.error(`- ${failure.email}: ${failure.reason}`);
@@ -303,10 +388,11 @@ type SendWithRetryInput = {
 	maxAttempts: number;
 	baseDelayMs: number;
 	configurationSet?: string;
+	rateLimiter: RateLimiter;
 	unsubscribeUrl?: string;
 };
 
-async function sendWithRetry(input: SendWithRetryInput) {
+async function sendWithRetry(input: SendWithRetryInput): Promise<string | undefined> {
 	const {
 		ses,
 		from,
@@ -317,6 +403,7 @@ async function sendWithRetry(input: SendWithRetryInput) {
 		maxAttempts,
 		baseDelayMs,
 		configurationSet,
+		rateLimiter,
 		unsubscribeUrl,
 	} = input;
 
@@ -331,6 +418,8 @@ async function sendWithRetry(input: SendWithRetryInput) {
 
 	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 		try {
+			await rateLimiter.acquire();
+
 			const headers = unsubscribeUrl
 				? [
 						{ Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
@@ -360,7 +449,7 @@ async function sendWithRetry(input: SendWithRetryInput) {
 			if (dev) {
 				console.info(`Sent to ${toAddress}: ${result.MessageId ?? "<no-id>"}`);
 			}
-			return;
+			return result.MessageId;
 		} catch (error) {
 			const shouldRetry = isRetryableSesError(error);
 			const isLastAttempt = attempt === maxAttempts;
@@ -376,6 +465,70 @@ async function sendWithRetry(input: SendWithRetryInput) {
 			await sleep(delay);
 		}
 	}
+}
+
+type SentLogRecord = {
+	email: string;
+	messageId?: string;
+	timestamp: string;
+};
+
+async function loadSentEmailSet(logFile: string): Promise<Set<string>> {
+	const result = new Set<string>();
+
+	if (!(await fs.pathExists(logFile))) {
+		return result;
+	}
+
+	const content = await fs.readFile(logFile, "utf8");
+	for (const line of content.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed) {
+			continue;
+		}
+
+		try {
+			const parsed = JSON.parse(trimmed) as { email?: unknown };
+			if (typeof parsed.email === "string" && parsed.email.trim().length > 0) {
+				result.add(parsed.email.trim().toLowerCase());
+			}
+		} catch {
+			continue;
+		}
+	}
+
+	return result;
+}
+
+async function appendSentRecord(logFile: string, record: SentLogRecord): Promise<void> {
+	await fs.ensureFile(logFile);
+	await fs.appendFile(logFile, `${JSON.stringify(record)}\n`, "utf8");
+}
+
+type RateLimiter = {
+	acquire: () => Promise<void>;
+};
+
+function createPerSecondRateLimiter(maxPerSecond: number): RateLimiter {
+	let timestamps: number[] = [];
+
+	return {
+		acquire: async () => {
+			while (true) {
+				const now = Date.now();
+				timestamps = timestamps.filter(ts => now - ts < 1000);
+
+				if (timestamps.length < maxPerSecond) {
+					timestamps.push(now);
+					return;
+				}
+
+				const oldest = timestamps[0];
+				const waitMs = Math.max(1, 1000 - (now - oldest));
+				await sleep(waitMs);
+			}
+		},
+	};
 }
 
 function isRetryableSesError(error: unknown): boolean {
@@ -438,6 +591,84 @@ function buildRecipientUnsubscribeUrl(input: BuildRecipientUnsubscribeUrlInput):
 function base64UrlEncode(input: string | Buffer): string {
 	const base64 = Buffer.isBuffer(input) ? input.toString("base64") : Buffer.from(input, "utf8").toString("base64");
 	return base64.replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+}
+
+async function processWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+	if (items.length === 0) {
+		return;
+	}
+
+	const effectiveLimit = Math.max(1, Math.min(limit, items.length));
+	let cursor = 0;
+
+	const runners = Array.from({ length: effectiveLimit }, async () => {
+		while (cursor < items.length) {
+			const index = cursor;
+			cursor++;
+			await worker(items[index]);
+		}
+	});
+
+	await Promise.all(runners);
+}
+
+type SuppressionCheckInput = {
+	endpointUrl: string;
+	bearerToken: string;
+};
+
+async function fetchSuppressedEmailSet(input: SuppressionCheckInput): Promise<Set<string>> {
+	const { endpointUrl, bearerToken } = input;
+	const result = new Set<string>();
+	let cursor: string | undefined;
+
+	for (let page = 0; page < 10_000; page++) {
+		const url = new URL(endpointUrl);
+		url.searchParams.set("suppressed", "1");
+		url.searchParams.set("limit", "1000");
+		if (cursor) {
+			url.searchParams.set("cursor", cursor);
+		}
+
+		const response = await fetch(url, {
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${bearerToken}`,
+				Accept: "application/json",
+			},
+		});
+
+		if (!response.ok) {
+			throw new Error(`Suppression sync endpoint returned ${response.status}`);
+		}
+
+		const payload = (await response.json()) as {
+			emails?: unknown;
+			cursor?: unknown;
+			done?: unknown;
+		};
+
+		if (!Array.isArray(payload.emails)) {
+			throw new TypeError("Suppression sync endpoint returned invalid emails payload");
+		}
+
+		for (const value of payload.emails) {
+			if (typeof value === "string" && value.trim().length > 0) {
+				result.add(value.trim().toLowerCase());
+			}
+		}
+
+		const done = payload.done === true;
+		const nextCursor = typeof payload.cursor === "string" && payload.cursor.length > 0 ? payload.cursor : undefined;
+
+		if (done || !nextCursor) {
+			break;
+		}
+
+		cursor = nextCursor;
+	}
+
+	return result;
 }
 
 function applyPlaceholders(input: string, values: TemplateProps): string {

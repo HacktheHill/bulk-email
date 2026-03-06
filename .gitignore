@@ -3,3 +3,5 @@ dist/
 *.csv
 .env
 templates/
+.sent-emails.jsonl
+*.log

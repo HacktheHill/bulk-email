@@ -24,7 +24,8 @@
 	"type": "module",
 	"scripts": {
 		"start": "npx tsx src/app.ts",
-		"build": "tsc"
+		"build": "tsc",
+		"verify-unsub-token": "npx tsx src/verify-unsubscribe-token.ts"
 	},
 	"bin": "dist/app.js",
 	"dependencies": {
