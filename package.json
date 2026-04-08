@@ -35,7 +35,7 @@
 		"fs-extra": "^11.1.0",
 		"handlebars": "^4.7.8",
 		"inquirer": "^9.1.4",
-		"nodemailer": "^6.9.14",
+		"nodemailer": "^8.0.5",
 		"nodemailer-smtp-transport": "^2.7.4",
 		"smtp-server": "^3.11.0",
 		"zod": "^3.20.2"
