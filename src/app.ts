@@ -8,7 +8,9 @@ import dotenv from "dotenv";
 import fs from "fs-extra";
 import { convert } from "html-to-text";
 import inquirer from "inquirer";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as React from "react";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
@@ -37,6 +39,8 @@ let {
 	templateDir,
 	template,
 	file,
+	subscriberExportUrl,
+	subscriberExportToken,
 	from,
 	fromName,
 	subject,
@@ -59,6 +63,14 @@ let {
 	.option("-d, --template-dir <templateDir>", "The path to the templates directory")
 	.option("-t, --template <template>", "The React Email template filename to send")
 	.option("-c, --file <file>", "The CSV file to read")
+	.option(
+		"--subscriber-export-url <subscriberExportUrl>",
+		"Authenticated email list CSV export URL (takes the place of --file)",
+	)
+	.option(
+		"--subscriber-export-token <subscriberExportToken>",
+		"Bearer token for the authenticated email list CSV export",
+	)
 	.option("-f, --from <from>", "The email address to send from")
 	.option("--from-name <fromName>", "Display name for the sender (e.g. 'Daniel Thorp')")
 	.option("-s, --subject <subject>", "Fallback subject if row does not define subject")
@@ -66,7 +78,7 @@ let {
 	.option("--configuration-set <configurationSet>", "SES configuration set name")
 	.option(
 		"--unsubscribe-base-url <unsubscribeBaseUrl>",
-		"Base URL for one-click unsubscribe endpoint (e.g. https://vote.danielthorp.com/unsubscribe)",
+		"Base URL for one-click unsubscribe endpoint (e.g. https://email-list-manager.hackthehill.com/unsubscribe)",
 	)
 	.option("--unsubscribe-secret <unsubscribeSecret>", "Secret used to sign unsubscribe tokens")
 	.option("--unsubscribe-url <unsubscribeUrl>", "URL for List-Unsubscribe header (RFC 8058)")
@@ -89,6 +101,8 @@ let {
 	.opts();
 
 dev ??= env.NODE_ENV === "development";
+subscriberExportUrl ??= env.SUBSCRIBER_EXPORT_URL;
+subscriberExportToken ??= env.SUBSCRIBER_EXPORT_TOKEN;
 region ??= env.AWS_REGION;
 subject ??= env.EMAIL_SUBJECT;
 fromName ??= env.EMAIL_FROM_NAME;
@@ -142,15 +156,58 @@ if (!template || !choices.includes(template)) {
 
 const templatePath = `${templateDir}/${template}`;
 
-// Ask for the CSV file
-file ??= (
-	await inquirer.prompt<{ file: string }>({
-		name: "file",
-		type: "input",
-		message: "Enter the path to a CSV file with name, email, and language columns",
-		default: "emails.csv",
-	})
-)?.file;
+let subscriberSnapshotSha256: string | undefined;
+let downloadedSnapshotFile: string | undefined;
+
+if (subscriberExportUrl && file) {
+	throw new Error("Use either --file or --subscriber-export-url, not both");
+}
+
+if (!subscriberExportUrl && subscriberExportToken) {
+	throw new Error("--subscriber-export-token requires --subscriber-export-url");
+}
+
+if (subscriberExportUrl) {
+	const parsed = z.string().url().safeParse(subscriberExportUrl);
+	if (!parsed.success || !subscriberExportToken) {
+		throw new Error(
+			"Both --subscriber-export-url and --subscriber-export-token (or SUBSCRIBER_EXPORT_URL and SUBSCRIBER_EXPORT_TOKEN) are required",
+		);
+	}
+
+	const response = await fetch(subscriberExportUrl, {
+		method: "GET",
+		headers: {
+			Authorization: `Bearer ${subscriberExportToken}`,
+			Accept: "text/csv",
+		},
+	});
+	if (!response.ok) {
+		throw new Error(`Subscriber export endpoint returned ${response.status}`);
+	}
+
+	const snapshot = await response.text();
+	if (!snapshot.trim()) {
+		throw new Error("Subscriber export endpoint returned an empty response");
+	}
+
+	subscriberSnapshotSha256 = createHash("sha256").update(snapshot, "utf8").digest("hex");
+	file = join(tmpdir(), `email-list-manager-${Date.now()}.csv`);
+	downloadedSnapshotFile = file;
+	await fs.writeFile(file, snapshot, "utf8");
+	console.info(`Downloaded subscriber CSV snapshot (${subscriberSnapshotSha256})`);
+} else {
+	// Ask for a local CSV file when an authenticated export is not configured.
+	file ??= (
+		await inquirer.prompt<{ file: string }>({
+			name: "file",
+			type: "input",
+			message: "Enter the path to a CSV file with name, email, and language columns",
+			default: "emails.csv",
+		})
+	)?.file;
+}
+
 // Validate the CSV file
 if (!file || !(await fs.pathExists(file)) || !z.string().endsWith(".csv").safeParse(file).success) {
 	throw new Error("Please specify a CSV file to read");
@@ -269,6 +326,10 @@ csvParser.subscribe(row => {
 // Wait for the stream to finish
 await csvParser;
 
+if (downloadedSnapshotFile) {
+	await fs.remove(downloadedSnapshotFile);
+}
+
 if (recipients.length === 0) {
 	console.info("No recipients were found in CSV");
 	process.exit(0);
@@ -352,6 +413,7 @@ for (let i = 0; i < recipients.length; i += batchSize) {
 					email: normalizedRecipientEmail,
 					messageId,
 					timestamp: new Date().toISOString(),
+					subscriberSnapshotSha256,
 				});
 				sent++;
 			} catch (error) {
@@ -471,6 +533,7 @@ type SentLogRecord = {
 	email: string;
 	messageId?: string;
 	timestamp: string;
+	subscriberSnapshotSha256?: string;
 };
 
 async function loadSentEmailSet(logFile: string): Promise<Set<string>> {

@@ -1,100 +1,59 @@
 # Bulk Email
 
-Bulk Email is a CLI for sending personalized campaigns using React Email templates and AWS SES v2.
-It reads recipients from CSV, renders each row into HTML + text, sends in controlled batches, and retries transient SES failures with exponential backoff.
+Bulk Email is a CLI for sending personalized campaigns using React Email templates and AWS SES v2. It can read a local CSV or download an authenticated CSV snapshot from the standalone Hack the Hill email list service.
 
 ## Usage
 
-Run the CLI with:
+Run interactively:
 
 ```bash
 npx tsx src/app.ts
 ```
 
-You can also pass options directly:
+For the email list service, configure the export and suppression endpoints:
 
 ```bash
+SUBSCRIBER_EXPORT_URL="https://email-list-manager.hackthehill.com/subscribe?export=csv" \
+SUBSCRIBER_EXPORT_TOKEN="replace-with-export-token" \
+SUPPRESSION_CHECK_URL="https://email-list-manager.hackthehill.com/unsubscribe" \
+SUPPRESSION_CHECK_TOKEN="replace-with-suppression-token" \
+UNSUBSCRIBE_BASE_URL="https://email-list-manager.hackthehill.com/unsubscribe" \
+UNSUBSCRIBE_SECRET="replace-with-unsubscribe-secret" \
 npx tsx src/app.ts \
-    --template-dir templates \
-    --template uosu.tsx \
-    --file emails.csv \
-    --from campaign@example.com \
-    --from-name "Campaign Team" \
-    --subject "Voting closes tonight" \
-    --region us-east-1 \
-    --unsubscribe-base-url "https://vote.danielthorp.com/unsubscribe" \
-    --unsubscribe-secret "replace-with-long-random-secret" \
-    --max-per-second 14 \
-    --sent-log-file .sent-emails.jsonl \
-    --concurrency 25 \
-    --batch-size 10 \
-    --batch-delay-ms 1200 \
-    --max-attempts 5 \
-    --base-delay-ms 500
+  --template-dir templates \
+  --template campaign.tsx \
+  --from info@hackthehill.com \
+  --region us-east-1
 ```
 
-## Required AWS Setup
+`--subscriber-export-url` and `--subscriber-export-token` are also available as CLI options. When configured, the CLI downloads exactly one CSV snapshot before parsing and sending. It fails closed if the endpoint is unavailable, unauthorized, invalid, or empty. The snapshot SHA-256 digest is recorded in each successful-send JSONL record.
 
-1. Use an IAM principal with SES permissions, at minimum `ses:SendEmail`.
-2. Set AWS credentials using standard AWS SDK resolution (env vars, shared config, role, etc.).
-3. Set your SES region (`AWS_REGION` or `--region`).
-4. Verify the sender identity in SES (`--from`).
-5. If your account is in SES sandbox, you must verify recipient addresses too.
+Use `--file emails.csv` when intentionally sending from a local file instead. `--file` and an authenticated export cannot be used together.
 
-## Template Format (React Email)
+## CSV format
 
-Templates live as files in `templates/` and must export a default React component.
-The CLI passes the full CSV row as props to the component.
-Templates can also export `subject` to define a campaign-wide subject line.
+The required column is `email`. Optional columns include `name`, `language`, and `subject`; all additional columns are passed to the template.
 
-Example template:
+## Unsubscribe behavior
 
-```tsx
-import { Html, Body, Text } from "@react-email/components";
-import * as React from "react";
+When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generates a per-recipient signed URL and sends both RFC 8058 headers:
 
-type Props = {
-    name?: string;
-};
-
-export const subject = "Campaign update";
-
-export default function ExampleEmail({ name = "friend" }: Props) {
-    return (
-        <Html>
-            <Body>
-                <Text>Hello {name}, this is your campaign update.</Text>
-            </Body>
-        </Html>
-    );
-}
+```text
+List-Unsubscribe: <https://email-list-manager.hackthehill.com/unsubscribe?t=...>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
 ```
 
-Placeholders like `{{name}}` are replaced using CSV values in template subject and rendered HTML.
+The Worker accepts both the current `token` parameter and the legacy `t` parameter. Templates should also display `unsubscribeUrl` in the HTML and text body.
 
-## CSV Format
+The sender fetches the suppression list once before a campaign and skips suppressed addresses locally. This remains defense in depth alongside AWS SES account-level suppression.
 
-Required column:
+## AWS SES setup
 
-- `email`
-
-Common optional columns:
-
-- `name`
-- `language`
-- `subject` (used only when template and CLI subject are not provided)
-
-Any additional columns are passed into template props.
-
-## Retry + Batching Behavior
-
-- Emails are sent in batches (`--batch-size`).
-- Sends inside each batch are concurrency-limited (`--concurrency`).
-- SES attempts are globally rate-limited (`--max-per-second`).
-- The CLI waits between batches (`--batch-delay-ms`).
-- Retryable SES errors (throttling/5xx/transient) are retried with exponential backoff and jitter.
-- Per-recipient retries are bounded by `--max-attempts`.
-- Successful sends are checkpointed to `--sent-log-file` and skipped on reruns.
+1. Verify the sender identity in SES.
+2. Use an IAM principal with only the SES permissions required by the campaign sender.
+3. Set an SES region (`AWS_REGION` or `--region`).
+4. Configure a configuration set with delivery, bounce, and complaint event destinations.
+5. Enable account-level suppression for hard bounces and complaints.
 
 ## Configuration
 
@@ -104,81 +63,23 @@ Environment variables:
 - `EMAIL_FROM`
 - `EMAIL_FROM_NAME`
 - `EMAIL_SUBJECT`
-- `SES_CONFIGURATION_SET` (optional)
-- `UNSUBSCRIBE_BASE_URL` (optional, requires `UNSUBSCRIBE_SECRET`)
-- `UNSUBSCRIBE_SECRET` (optional, requires `UNSUBSCRIBE_BASE_URL`)
-- `UNSUBSCRIBE_URL` (optional static fallback URL if not using tokens)
+- `SES_CONFIGURATION_SET`
+- `SUBSCRIBER_EXPORT_URL` (optional; takes the place of a local CSV)
+- `SUBSCRIBER_EXPORT_TOKEN` (required when the export URL is set)
+- `UNSUBSCRIBE_BASE_URL`
+- `UNSUBSCRIBE_SECRET`
+- `UNSUBSCRIBE_URL` (optional static fallback)
 - `SUPPRESSION_CHECK_URL` (required)
 - `SUPPRESSION_CHECK_TOKEN` (required)
-- `SES_MAX_PER_SECOND` (default: `14`)
-- `SENT_LOG_FILE` (default: `.sent-emails.jsonl`)
-- `SEND_CONCURRENCY` (default: `25`)
-- `BATCH_SIZE` (default: `10`)
-- `BATCH_DELAY_MS` (default: `1200`)
-- `MAX_ATTEMPTS` (default: `5`)
-- `BASE_DELAY_MS` (default: `500`)
+- `SES_MAX_PER_SECOND` (default `14`)
+- `SENT_LOG_FILE` (default `.sent-emails.jsonl`)
+- `SEND_CONCURRENCY` (default `25`)
+- `BATCH_SIZE` (default `10`)
+- `BATCH_DELAY_MS` (default `1200`)
+- `MAX_ATTEMPTS` (default `5`)
+- `BASE_DELAY_MS` (default `500`)
 
 CLI flags override environment values.
-
-## Unsubscribe Tokens
-
-When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generates a per-recipient URL:
-
-`https://vote.danielthorp.com/unsubscribe?t=<signed-token>`
-
-The same URL is used in `List-Unsubscribe` headers and exposed to templates as `unsubscribeUrl`.
-Token format is `<payload_b64url>.<hmac_sha256_signature_b64url>` where payload is JSON containing recipient email and issue time.
-
-Quick verification for a generated token:
-
-```bash
-npm run verify-unsub-token -- \
-    --url "https://vote.danielthorp.com/unsubscribe?t=<token>" \
-    --secret "your-unsubscribe-secret"
-```
-
-Or pass token directly:
-
-```bash
-npm run verify-unsub-token -- --token "<payload>.<signature>" --secret "your-unsubscribe-secret"
-```
-
-For the Cloudflare Worker project, set the Worker secret with Wrangler (do not store in `wrangler.jsonc`):
-
-```bash
-cd workers/unsubscribe-worker
-npx wrangler secret put UOSU_UNSUBSCRIBE_TOKEN_SECRET
-npx wrangler secret put UOSU_SUPPRESSION_READ_TOKEN
-```
-
-## Suppression Sync
-
-The sender always fetches suppressed emails once at startup and skips them locally during the send.
-This avoids one HTTP call per recipient.
-
-Expected endpoint response shape:
-
-```json
-{
-    "emails": ["user1@example.com", "user2@example.com"],
-    "cursor": "optional-pagination-cursor",
-    "done": true
-}
-```
-
-The sender requests pages from:
-
-`GET <SUPPRESSION_CHECK_URL>?suppressed=1&limit=1000&cursor=<optional>`
-
-with `Authorization: Bearer <SUPPRESSION_CHECK_TOKEN>`.
-
-## Best Practices
-
-1. Use SES configuration sets + CloudWatch/Kinesis/SNS event destinations for delivery, bounce, and complaint tracking.
-2. Always include both HTML and text bodies (this CLI does).
-3. Maintain suppression handling (global and account-level suppression lists).
-4. Warm up gradually: start with smaller batch sizes and increase as reputation stabilizes.
-5. Keep retry bounded and only for transient errors to avoid duplicate-send amplification.
 
 ## Scripts
 
@@ -186,7 +87,3 @@ with `Authorization: Bearer <SUPPRESSION_CHECK_TOKEN>`.
 npm run start
 npm run build
 ```
-
-## License
-
-This package is under an [MIT license](LICENSE).
