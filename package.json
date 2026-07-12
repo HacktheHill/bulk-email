@@ -1,7 +1,7 @@
 {
 	"$schema": "https://json.schemastore.org/package",
 	"name": "bulk-email",
-	"description": "Send bulk emails using nodemailer",
+	"description": "Send bulk emails with React Email templates through AWS SES",
 	"version": "2.0.1",
 	"main": "dist/app.js",
 	"module": "dist/app.js",
@@ -18,33 +18,38 @@
 		"email",
 		"cli",
 		"send",
-		"smtp",
-		"nodemailer"
+		"ses",
+		"react-email"
 	],
 	"type": "module",
 	"scripts": {
 		"start": "npx tsx src/app.ts",
-		"build": "tsc"
+		"build": "tsc",
+		"verify-unsub-token": "npx tsx src/verify-unsubscribe-token.ts"
 	},
 	"bin": "dist/app.js",
 	"dependencies": {
+		"@aws-sdk/client-sesv2": "^3.879.0",
+		"@react-email/components": "^1.0.8",
+		"@react-email/render": "^1.1.2",
 		"@types/fs-extra": "^9.0.13",
 		"commander": "^9.4.1",
 		"csvtojson": "^2.0.10",
 		"dotenv": "^16.0.3",
 		"fs-extra": "^11.1.0",
-		"handlebars": "^4.7.8",
+		"html-to-text": "^9.0.5",
 		"inquirer": "^9.1.4",
-		"nodemailer": "^9.0.1",
-		"nodemailer-smtp-transport": "^2.7.4",
+		"react": "^19.2.0",
+		"react-dom": "^19.2.0",
 		"smtp-server": "^3.11.0",
 		"zod": "^3.20.2"
 	},
 	"devDependencies": {
+		"@types/html-to-text": "^9.0.4",
 		"@types/inquirer": "^9.0.3",
-		"@types/nodemailer": "^6.4.7",
-		"@types/nodemailer-smtp-transport": "^2.7.5",
+		"@types/react": "^19.2.2",
 		"@types/smtp-server": "^3.5.7",
+		"tsx": "^4.21.0",
 		"typescript": "^4.9.4"
 	}
 }

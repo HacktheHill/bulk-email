@@ -1,86 +1,89 @@
 # Bulk Email
 
-Bulk Email is a CLI tool designed for sending bulk emails. It reads from a CSV file containing a list of recipients and uses a directory of Handlebars email templates to send personalized emails to each recipient.
+Bulk Email is a CLI for sending personalized campaigns using React Email templates and AWS SES v2. It can read a local CSV or download an authenticated CSV snapshot from the standalone Hack the Hill email list service.
 
 ## Usage
 
-You can send emails using the `npx bulk-email` command. The CLI will prompt you to select an email template, provide the path to the CSV file containing the list of recipients, and enter the email credentials. The CSV file should have the following columns:
+Run interactively:
 
-- `name`: The name of the recipient
-- `email`: The email address of the recipient
-- `language`: The language preference of the recipient (`en` or `fr`)
-
-The email templates directory should contain folders for each template. Inside each folder, there should be a `text.hbs` file for the plain text version of the email and a `html.hbs` file for the HTML version. The email templates are written in Handlebars and are compiled using the language data from the corresponding `language.json` file, along with the `name` and `email` variables for the recipient's information.
-
-The `language.json` file can also include `from`, `subject`, and `meta` keys. The `meta` key will be parsed as email List headers.
-
-### Example `language.json` File
-
-```jsonc
-{
-    "en": {
-        "from": "Your name",
-        "subject": "Subject here",
-        "greeting": "Hello",
-        "message": [
-            "This is a message",
-            "It has multiple lines"
-        ],
-        "signature": "Your signature",
-        "closing": "Your name",
-        "unsubscribe": "Unsubscribe",
-        "meta": {
-            "help": "admin@example.com?subject=Help with mailing list",
-            "unsubscribe": {
-                "url": "https://example.com/unsubscribe?email={{email}}",
-                "comment": "Unsubscribe from further emails"
-            },
-            "id": {
-                "url": "https://example.com",
-                "comment": "2023 mailing list"
-            }
-        }
-    },
-    "fr": {
-        "from": "Votre nom",
-        "subject": "Sujet ici",
-        // Similar structure as the English version
-    }
-}
+```bash
+npx tsx src/app.ts
 ```
 
-### Example `text.hbs` File
+For the email list service, configure the export and suppression endpoints:
 
-```handlebars
-{{greeting}}, {{name}}!
-
-{{#each message as |paragraph|}}
-    {{paragraph}}
-{{/each}}
-
-{{signature}}
-
-{{closing}}
-
-{{unsubscribe}}: https://example.com/unsubscribe?email={{email}}
+```bash
+SUBSCRIBER_EXPORT_URL="https://emails.hackthehill.com/subscribe?export=csv" \
+SUBSCRIBER_EXPORT_TOKEN="replace-with-export-token" \
+SUPPRESSION_CHECK_URL="https://emails.hackthehill.com/unsubscribe" \
+SUPPRESSION_CHECK_TOKEN="replace-with-suppression-token" \
+UNSUBSCRIBE_BASE_URL="https://emails.hackthehill.com/unsubscribe" \
+UNSUBSCRIBE_SECRET="replace-with-unsubscribe-secret" \
+npx tsx src/app.ts \
+  --template-dir templates \
+  --template campaign.tsx \
+  --from info@hackthehill.com \
+  --region us-east-1
 ```
 
-### Example `html.hbs` File
+`--subscriber-export-url` and `--subscriber-export-token` are also available as CLI options. When configured, the CLI downloads exactly one CSV snapshot before parsing and sending. It fails closed if the endpoint is unavailable, unauthorized, invalid, or empty. The snapshot SHA-256 digest is recorded in each successful-send JSONL record.
 
-```handlebars
-<p>{{greeting}}, {{name}}!</p>
+Use `--file emails.csv` when intentionally sending from a local file instead. `--file` and an authenticated export cannot be used together.
 
-{{#each message as |paragraph|}}
-    <p>{{paragraph}}</p>
-{{/each}}
+## CSV format
 
-<p>{{signature}}</p>
+The required column is `email`. Optional columns include `name`, `language`, and `subject`; all additional columns are passed to the template.
 
-<p>{{closing}}</p>
+## Unsubscribe behavior
 
-<a href="https://example.com/unsubscribe?email={{email}}">{{unsubscribe}}</a>
+When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generates a per-recipient signed URL and sends both RFC 8058 headers:
+
+```text
+List-Unsubscribe: <https://emails.hackthehill.com/unsubscribe?t=...>
+List-Unsubscribe-Post: List-Unsubscribe=One-Click
 ```
 
-## License
+The Worker accepts both the current `token` parameter and the legacy `t` parameter. Templates should also display `unsubscribeUrl` in the HTML and text body.
 
-This package is under an [MIT license](LICENSE).
+The sender fetches the suppression list once before a campaign and skips suppressed addresses locally. This remains defense in depth alongside AWS SES account-level suppression.
+
+## AWS SES setup
+
+1. Verify the sender identity in SES.
+2. Use an IAM principal with only the SES permissions required by the campaign sender.
+3. Set an SES region (`AWS_REGION` or `--region`).
+4. Configure a configuration set with delivery, bounce, and complaint event destinations.
+5. Enable account-level suppression for hard bounces and complaints.
+
+## Configuration
+
+Environment variables:
+
+- `AWS_REGION`
+- `EMAIL_FROM`
+- `EMAIL_FROM_NAME`
+- `EMAIL_SUBJECT`
+- `SES_CONFIGURATION_SET`
+- `SUBSCRIBER_EXPORT_URL` (optional; takes the place of a local CSV)
+- `SUBSCRIBER_EXPORT_TOKEN` (required when the export URL is set)
+- `UNSUBSCRIBE_BASE_URL`
+- `UNSUBSCRIBE_SECRET`
+- `UNSUBSCRIBE_URL` (optional static fallback)
+- `SUPPRESSION_CHECK_URL` (required)
+- `SUPPRESSION_CHECK_TOKEN` (required)
+- `SES_MAX_PER_SECOND` (default `14`)
+- `SENT_LOG_FILE` (default `.sent-emails.jsonl`)
+- `SEND_CONCURRENCY` (default `25`)
+- `BATCH_SIZE` (default `10`)
+- `BATCH_DELAY_MS` (default `1200`)
+- `MAX_ATTEMPTS` (default `5`)
+- `BASE_DELAY_MS` (default `500`)
+
+CLI flags override environment values.
+
+## Scripts
+
+```bash
+npm run start
+npm run build
+```
