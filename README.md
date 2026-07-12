@@ -13,11 +13,11 @@ npx tsx src/app.ts
 For the email list service, configure the export and suppression endpoints:
 
 ```bash
-SUBSCRIBER_EXPORT_URL="https://email-list-manager.hackthehill.com/subscribe?export=csv" \
+SUBSCRIBER_EXPORT_URL="https://emails.hackthehill.com/subscribe?export=csv" \
 SUBSCRIBER_EXPORT_TOKEN="replace-with-export-token" \
-SUPPRESSION_CHECK_URL="https://email-list-manager.hackthehill.com/unsubscribe" \
+SUPPRESSION_CHECK_URL="https://emails.hackthehill.com/unsubscribe" \
 SUPPRESSION_CHECK_TOKEN="replace-with-suppression-token" \
-UNSUBSCRIBE_BASE_URL="https://email-list-manager.hackthehill.com/unsubscribe" \
+UNSUBSCRIBE_BASE_URL="https://emails.hackthehill.com/unsubscribe" \
 UNSUBSCRIBE_SECRET="replace-with-unsubscribe-secret" \
 npx tsx src/app.ts \
   --template-dir templates \
@@ -39,7 +39,7 @@ The required column is `email`. Optional columns include `name`, `language`, and
 When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generates a per-recipient signed URL and sends both RFC 8058 headers:
 
 ```text
-List-Unsubscribe: <https://email-list-manager.hackthehill.com/unsubscribe?t=...>
+List-Unsubscribe: <https://emails.hackthehill.com/unsubscribe?t=...>
 List-Unsubscribe-Post: List-Unsubscribe=One-Click
 ```
 

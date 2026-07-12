@@ -78,7 +78,7 @@ let {
 	.option("--configuration-set <configurationSet>", "SES configuration set name")
 	.option(
 		"--unsubscribe-base-url <unsubscribeBaseUrl>",
-		"Base URL for one-click unsubscribe endpoint (e.g. https://email-list-manager.hackthehill.com/unsubscribe)",
+		"Base URL for one-click unsubscribe endpoint (e.g. https://emails.hackthehill.com/unsubscribe)",
 	)
 	.option("--unsubscribe-secret <unsubscribeSecret>", "Secret used to sign unsubscribe tokens")
 	.option("--unsubscribe-url <unsubscribeUrl>", "URL for List-Unsubscribe header (RFC 8058)")
