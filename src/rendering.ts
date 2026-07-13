@@ -80,15 +80,6 @@ export function validateRenderedMessage(input: {
 	if (/\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.html) || /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.text)) {
 		throw new Error("Template contains unresolved placeholders");
 	}
-	for (const requiredFooterText of [
-		"Capital Technology Network",
-		"info@hackthehill.com",
-		"0109-800 King Edward Avenue",
-	]) {
-		if (!input.html.includes(requiredFooterText) || !input.text.includes(requiredFooterText)) {
-			throw new Error(`Template must render required footer text in HTML and plain text: ${requiredFooterText}`);
-		}
-	}
 	if (input.metadata.audience === "subscribers") {
 		if (!input.unsubscribeUrl || !input.html.includes(input.unsubscribeUrl) || !input.text.includes(input.unsubscribeUrl)) {
 			throw new Error("Subscriber template must visibly render its unsubscribe URL in HTML and text");

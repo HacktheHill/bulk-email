@@ -11,8 +11,6 @@ const limits = {
 	maxTotalBytes: 20_000,
 };
 
-const footer = "Capital Technology Network · info@hackthehill.com · 0109-800 King Edward Avenue";
-
 test("pre-renders subscriber HTML and text with the visible unsubscribe URL", async () => {
 	const template: TemplateModule = {
 		metadata: {
@@ -26,7 +24,6 @@ test("pre-renders subscriber HTML and text with the visible unsubscribe URL", as
 		default: ({ name, unsubscribeUrl }) => React.createElement("div", null,
 			React.createElement("p", null, `Hello ${String(name)}`),
 			React.createElement("a", { href: String(unsubscribeUrl) }, "Unsubscribe"),
-			React.createElement("p", null, footer),
 		),
 	};
 	const [message] = await renderCampaign({
@@ -53,10 +50,7 @@ test("provided-CSV templates render without marketing unsubscribe data", async (
 		},
 		default: props => {
 			receivedUnsubscribe = "unsubscribeUrl" in props;
-			return React.createElement("div", null,
-				React.createElement("p", null, "Your RSVP expires tomorrow."),
-				React.createElement("p", null, footer),
-			);
+			return React.createElement("p", null, "Your RSVP expires tomorrow.");
 		},
 	};
 	const messages = await renderCampaign({
@@ -72,19 +66,19 @@ test("provided-CSV templates render without marketing unsubscribe data", async (
 test("fails the entire preflight for missing fields, unresolved placeholders, or absent unsubscribe", async () => {
 	const missingField: TemplateModule = {
 		metadata: { id: "missing", version: 1, audience: "provided-csv", localization: "localized", subject: "Hi", requiredFields: ["name"] },
-		default: () => React.createElement("p", null, `Hello ${footer}`),
+		default: () => React.createElement("p", null, "Hello"),
 	};
 	await assert.rejects(renderCampaign({ template: missingField, recipients: [{ email: "person@example.com" }], limits, buildUnsubscribeUrl: () => undefined }), /missing required field/);
 
 	const unresolved: TemplateModule = {
 		metadata: { id: "unresolved", version: 1, audience: "provided-csv", localization: "localized", subject: "Hi", requiredFields: [] },
-		default: () => React.createElement("p", null, `Hello {{unknown}} ${footer}`),
+		default: () => React.createElement("p", null, "Hello {{unknown}}"),
 	};
 	await assert.rejects(renderCampaign({ template: unresolved, recipients: [{ email: "person@example.com" }], limits, buildUnsubscribeUrl: () => undefined }), /unresolved placeholder/);
 
 	const subscriber: TemplateModule = {
 		metadata: { id: "subscriber", version: 1, audience: "subscribers", localization: "localized", subject: "Hi", requiredFields: [] },
-		default: () => React.createElement("p", null, `Hello ${footer}`),
+		default: () => React.createElement("p", null, "Hello"),
 	};
 	await assert.rejects(renderCampaign({ template: subscriber, recipients: [{ email: "person@example.com" }], limits, buildUnsubscribeUrl: () => undefined }), /require a configured signed unsubscribe URL/);
 });
