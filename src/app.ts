@@ -1,37 +1,35 @@
 #!/usr/bin/env node
 
-import { SendEmailCommand, SESv2Client } from "@aws-sdk/client-sesv2";
+import { SESv2Client } from "@aws-sdk/client-sesv2";
 import { render } from "@react-email/render";
 import { program } from "commander";
-import csv from "csvtojson";
 import dotenv from "dotenv";
 import fs from "fs-extra";
-import { convert } from "html-to-text";
 import inquirer from "inquirer";
-import { createHash, createHmac } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
 import * as React from "react";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
+import { confirmCampaignSend } from "./confirmation.js";
+import { fetchCsvSnapshot, fetchSuppressedEmailSet } from "./list-service.js";
+import { applyPlaceholders, createPerSecondRateLimiter, sendWithRetry, type TemplateProps } from "./mailer.js";
+import { readRecipientCsv, readRecipientCsvText } from "./recipients.js";
+import { fetchSesSuppressedEmailSet, mergeSuppressionSets, verifySesPreflight } from "./ses-service.js";
+import { checkpointSentMessage, loadSentEmailSet, SentLogCheckpointError } from "./sent-log.js";
+import {
+	buildRecipientUnsubscribeUrl,
+	deduplicateRecipients,
+	isValidCampaignId,
+	normalizeEmail,
+} from "./utils.js";
 
 dotenv.config();
 const { env } = process;
 
-type TemplateProps = Record<string, unknown>;
 type TemplateModule = {
 	default: (props: TemplateProps) => React.ReactElement;
 	subject?: string;
 };
-
-const recipientSchema = z
-	.object({
-		email: z.string().email(),
-		name: z.string().optional().default(""),
-		language: z.string().optional().default("en"),
-		subject: z.string().optional(),
-	})
-	.passthrough();
 
 // Parse the command line arguments
 let {
@@ -58,6 +56,12 @@ let {
 	batchDelayMs,
 	maxAttempts,
 	baseDelayMs,
+	campaignId,
+	dryRun,
+	fetchTimeoutMs,
+	maxExportBytes,
+	maxSuppressionPageBytes,
+	yes,
 } = program
 	.option("-v, --dev", "Run in development mode")
 	.option("-d, --template-dir <templateDir>", "The path to the templates directory")
@@ -97,6 +101,16 @@ let {
 	.option("--batch-delay-ms <batchDelayMs>", "Delay between batches in milliseconds", Number)
 	.option("--max-attempts <maxAttempts>", "Retry attempts per email", Number)
 	.option("--base-delay-ms <baseDelayMs>", "Base retry delay in milliseconds", Number)
+	.option("--campaign-id <campaignId>", "Stable identifier used to scope resume logs (required)")
+	.option("--dry-run", "Download, validate, and summarize the campaign without sending")
+	.option("--fetch-timeout-ms <fetchTimeoutMs>", "Timeout for list service requests in milliseconds", Number)
+	.option("--max-export-bytes <maxExportBytes>", "Maximum CSV export size in bytes", Number)
+	.option(
+		"--max-suppression-page-bytes <maxSuppressionPageBytes>",
+		"Maximum suppression response page size in bytes",
+		Number,
+	)
+	.option("--yes", "Skip the final interactive send confirmation")
 	.parse()
 	.opts();
 
@@ -112,13 +126,37 @@ unsubscribeUrl ??= env.UNSUBSCRIBE_URL;
 suppressionCheckUrl ??= env.SUPPRESSION_CHECK_URL;
 suppressionCheckToken ??= env.SUPPRESSION_CHECK_TOKEN;
 maxPerSecond ??= Number(env.SES_MAX_PER_SECOND ?? 14);
-sentLogFile ??= env.SENT_LOG_FILE ?? ".sent-emails.jsonl";
+sentLogFile ??= env.SENT_LOG_FILE;
 concurrency ??= Number(env.SEND_CONCURRENCY ?? 25);
 batchSize ??= Number(env.BATCH_SIZE ?? 10);
 batchDelayMs ??= Number(env.BATCH_DELAY_MS ?? 1200);
 maxAttempts ??= Number(env.MAX_ATTEMPTS ?? 5);
 baseDelayMs ??= Number(env.BASE_DELAY_MS ?? 500);
 configurationSet ??= env.SES_CONFIGURATION_SET;
+campaignId ??= env.CAMPAIGN_ID;
+fetchTimeoutMs ??= Number(env.FETCH_TIMEOUT_MS ?? 15_000);
+maxExportBytes ??= Number(env.MAX_EXPORT_BYTES ?? 25 * 1024 * 1024);
+maxSuppressionPageBytes ??= Number(env.MAX_SUPPRESSION_PAGE_BYTES ?? 2 * 1024 * 1024);
+
+if (!campaignId || !isValidCampaignId(campaignId)) {
+	throw new Error(
+		"campaign-id is required and must contain only letters, numbers, dots, underscores, or hyphens (maximum 128 characters)",
+	);
+}
+
+if (!Number.isInteger(fetchTimeoutMs) || fetchTimeoutMs <= 0) {
+	throw new Error("fetch-timeout-ms must be a positive integer");
+}
+
+if (!Number.isInteger(maxExportBytes) || maxExportBytes <= 0) {
+	throw new Error("max-export-bytes must be a positive integer");
+}
+
+if (!Number.isInteger(maxSuppressionPageBytes) || maxSuppressionPageBytes <= 0) {
+	throw new Error("max-suppression-page-bytes must be a positive integer");
+}
+
+sentLogFile ??= env.SENT_LOG_FILE ?? `.sent-emails-${campaignId}.jsonl`;
 
 // Ask for the template directory
 templateDir ??= (
@@ -157,7 +195,7 @@ if (!template || !choices.includes(template)) {
 const templatePath = `${templateDir}/${template}`;
 
 let subscriberSnapshotSha256: string | undefined;
-let downloadedSnapshotFile: string | undefined;
+let subscriberSnapshotCsv: string | undefined;
 
 if (subscriberExportUrl && file) {
 	throw new Error("Use either --file or --subscriber-export-url, not both");
@@ -175,26 +213,17 @@ if (subscriberExportUrl) {
 		);
 	}
 
-	const response = await fetch(subscriberExportUrl, {
-		method: "GET",
-		headers: {
-			Authorization: `Bearer ${subscriberExportToken}`,
-			Accept: "text/csv",
-		},
+	subscriberSnapshotCsv = await fetchCsvSnapshot({
+		url: subscriberExportUrl,
+		token: subscriberExportToken,
+		timeoutMs: fetchTimeoutMs,
+		maxBytes: maxExportBytes,
 	});
-	if (!response.ok) {
-		throw new Error(`Subscriber export endpoint returned ${response.status}`);
-	}
-
-	const snapshot = await response.text();
-	if (!snapshot.trim()) {
+	if (!subscriberSnapshotCsv.trim()) {
 		throw new Error("Subscriber export endpoint returned an empty response");
 	}
 
-	subscriberSnapshotSha256 = createHash("sha256").update(snapshot, "utf8").digest("hex");
-	file = join(tmpdir(), `email-list-manager-${Date.now()}.csv`);
-	downloadedSnapshotFile = file;
-	await fs.writeFile(file, snapshot, "utf8");
+	subscriberSnapshotSha256 = createHash("sha256").update(subscriberSnapshotCsv, "utf8").digest("hex");
 	console.info(`Downloaded subscriber CSV snapshot (${subscriberSnapshotSha256})`);
 } else {
 	// Ask for a local CSV file when an authenticated export is not configured.
@@ -209,7 +238,7 @@ if (subscriberExportUrl) {
 }
 
 // Validate the CSV file
-if (!file || !(await fs.pathExists(file)) || !z.string().endsWith(".csv").safeParse(file).success) {
+if (!subscriberSnapshotCsv && (!file || !(await fs.pathExists(file)) || !z.string().endsWith(".csv").safeParse(file).success)) {
 	throw new Error("Please specify a CSV file to read");
 }
 
@@ -236,6 +265,10 @@ if (!from || !z.string().email().safeParse(from).success) {
 
 if (!region || !z.string().min(1).safeParse(region).success) {
 	throw new Error("Please specify AWS region (e.g. us-east-1)");
+}
+
+if (!configurationSet) {
+	throw new Error("Please specify the SES configuration set");
 }
 
 if (!Number.isFinite(batchSize) || batchSize <= 0) {
@@ -302,130 +335,206 @@ const templateSubject = typeof templateModule.subject === "string" ? templateMod
 
 const ses = new SESv2Client({ region });
 
-// Create a parser
-const csvParser = csv({
-	trim: true,
-});
+const sesIdentity = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
+console.info(`Checking SES account, identity ${sesIdentity}, and configuration set ${configurationSet}...`);
+await verifySesPreflight({ client: ses, identity: sesIdentity, configurationSet });
 
-// Open a file stream
-fs.createReadStream(file).pipe(csvParser);
+const recipients: TemplateProps[] = subscriberSnapshotCsv
+	? readRecipientCsvText(subscriberSnapshotCsv)
+	: await readRecipientCsv(file!);
 
-// Transform the stream
-const recipients: TemplateProps[] = [];
-csvParser.subscribe(row => {
-	const schema = recipientSchema.safeParse(row);
-
-	if (!schema.success) {
-		console.error(`Failed to parse CSV row: ${JSON.stringify(row)}`);
-		process.exit(-1);
-	}
-
-	recipients.push(schema.data);
-});
-
-// Wait for the stream to finish
-await csvParser;
-
-if (downloadedSnapshotFile) {
-	await fs.remove(downloadedSnapshotFile);
+const deduplicated = deduplicateRecipients(recipients as Array<{ email: string; [key: string]: unknown }>);
+const uniqueRecipients = deduplicated.recipients as TemplateProps[];
+if (deduplicated.duplicates > 0) {
+	console.info(`Removed ${deduplicated.duplicates} duplicate recipient row(s).`);
 }
 
-if (recipients.length === 0) {
+if (uniqueRecipients.length === 0) {
 	console.info("No recipients were found in CSV");
 	process.exit(0);
 }
 
-const alreadySentEmails = await loadSentEmailSet(sentLogFile);
+const alreadySentEmails = await loadSentEmailSet(sentLogFile, campaignId);
 console.info(`Loaded ${alreadySentEmails.size} already-sent address(es) from ${sentLogFile}.`);
 
-console.info("Syncing suppression list...");
-const suppressedEmails = await fetchSuppressedEmailSet({
+console.info("Syncing email-list-manager and SES suppression lists...");
+const listManagerSuppressions = await fetchSuppressedEmailSet({
 	endpointUrl: suppressionCheckUrl,
 	bearerToken: suppressionCheckToken,
+	timeoutMs: fetchTimeoutMs,
+	maxPageBytes: maxSuppressionPageBytes,
 });
-console.info(`Suppression sync complete. Loaded ${suppressedEmails.size} suppressed address(es).`);
+const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
+const suppressedEmails = mergeSuppressionSets(listManagerSuppressions, sesSuppressions);
+console.info(
+	`Suppression sync complete: ${listManagerSuppressions.size} email-list-manager, ${sesSuppressions.size} SES, ${suppressedEmails.size} unique.`,
+);
+
+const pendingRecipients: TemplateProps[] = [];
+let skippedAlreadySent = 0;
+let skippedSuppressed = 0;
+let skippedListManagerSuppressed = 0;
+let skippedSesSuppressed = 0;
+let skippedByBothSuppressionSources = 0;
+for (const recipient of uniqueRecipients) {
+	const recipientEmail = String(recipient.email);
+	const normalizedRecipientEmail = normalizeEmail(recipientEmail);
+
+	if (alreadySentEmails.has(normalizedRecipientEmail)) {
+		skippedAlreadySent++;
+		continue;
+	}
+
+	const listManagerSuppressed = listManagerSuppressions.has(normalizedRecipientEmail);
+	const sesSuppressed = sesSuppressions.has(normalizedRecipientEmail);
+	if (listManagerSuppressed || sesSuppressed) {
+		skippedSuppressed++;
+		if (listManagerSuppressed) skippedListManagerSuppressed++;
+		if (sesSuppressed) skippedSesSuppressed++;
+		if (listManagerSuppressed && sesSuppressed) skippedByBothSuppressionSources++;
+		continue;
+	}
+
+	pendingRecipients.push(recipient);
+}
+
+let missingSubjectCount = 0;
+for (const recipient of pendingRecipients) {
+	const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
+	const rawSubject = templateSubject ?? subject ?? rowSubject;
+	if (!rawSubject || !applyPlaceholders(rawSubject, recipient)) {
+		missingSubjectCount++;
+	}
+}
+
+console.info(
+	`Campaign ${campaignId}: ${uniqueRecipients.length} unique recipient(s), ${skippedAlreadySent} already sent, ${skippedSuppressed} suppressed, ${pendingRecipients.length} pending${missingSubjectCount > 0 ? `, ${missingSubjectCount} missing subject(s)` : ""}.`,
+);
+if (skippedSuppressed > 0) {
+	console.info(
+		`Excluded by suppression source: ${skippedListManagerSuppressed} email-list-manager, ${skippedSesSuppressed} SES, ${skippedByBothSuppressionSources} present in both.`,
+	);
+}
+
+if (dryRun) {
+	if (pendingRecipients.length > 0 && missingSubjectCount < pendingRecipients.length) {
+		const sample = pendingRecipients.find(recipient => {
+			const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
+			const rawSubject = templateSubject ?? subject ?? rowSubject;
+			return rawSubject && applyPlaceholders(rawSubject, recipient);
+		});
+		if (sample) {
+			const rowSubject = typeof sample.subject === "string" ? sample.subject : undefined;
+			const rawSubject = templateSubject ?? subject ?? rowSubject;
+			await render(React.createElement(templateModule.default, sample));
+			console.info(`Dry run template validation succeeded (subject: ${applyPlaceholders(rawSubject!, sample)}).`);
+		}
+	}
+	if (missingSubjectCount > 0) {
+		throw new Error(`${missingSubjectCount} pending recipient(s) have no usable subject`);
+	}
+	console.info("Dry run complete; no messages were sent.");
+	process.exit(0);
+}
+
+if (pendingRecipients.length === 0) {
+	console.info("No pending recipients remain after resume and suppression checks.");
+	process.exit(0);
+}
+
+console.info([
+	"Ready to send:",
+	`  Campaign: ${campaignId}`,
+	`  Recipients: ${pendingRecipients.length}`,
+	`  Sender: ${fromName ? `${fromName} <${from}>` : from}`,
+	`  SES configuration set: ${configurationSet}`,
+	"  Dry run: no",
+].join("\n"));
+const confirmed = await confirmCampaignSend({
+	yes: Boolean(yes),
+	prompt: async message => (await inquirer.prompt<{ confirmed: boolean }>({
+		name: "confirmed",
+		type: "confirm",
+		message,
+		default: false,
+	})).confirmed,
+});
+if (!confirmed) {
+	console.info("Campaign cancelled; no messages were sent.");
+	process.exit(0);
+}
 
 const rateLimiter = createPerSecondRateLimiter(maxPerSecond);
 
 console.info(
-	`Sending ${recipients.length} message(s) to AWS SES in batches of ${batchSize} with concurrency ${concurrency} and max ${maxPerSecond}/sec...`,
+	`Sending ${pendingRecipients.length} message(s) to AWS SES in batches of ${batchSize} with concurrency ${concurrency} and max ${maxPerSecond}/sec...`,
 );
 
 let sent = 0;
-let skippedAlreadySent = 0;
-let skippedSuppressed = 0;
 const failures: Array<{ email: string; reason: string }> = [];
-for (let i = 0; i < recipients.length; i += batchSize) {
-	const batch = recipients.slice(i, i + batchSize);
+for (let i = 0; i < pendingRecipients.length; i += batchSize) {
+	const batch = pendingRecipients.slice(i, i + batchSize);
 	await processWithConcurrency(batch, concurrency, async recipient => {
-			const recipientEmail = String(recipient.email);
-			const normalizedRecipientEmail = recipientEmail.trim().toLowerCase();
+		const recipientEmail = String(recipient.email);
+		const normalizedRecipientEmail = normalizeEmail(recipientEmail);
 
-			if (alreadySentEmails.has(normalizedRecipientEmail)) {
-				skippedAlreadySent++;
-				return;
-			}
-
-			if (suppressedEmails.has(normalizedRecipientEmail)) {
-				skippedSuppressed++;
-				console.info(`Skipping suppressed recipient: ${recipientEmail}`);
-				return;
-			}
-
-			const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
-			const rawSubject = templateSubject ?? subject ?? rowSubject;
-			const messageSubject = rawSubject ? applyPlaceholders(rawSubject, recipient) : undefined;
-			const generatedUnsubscribeUrl = buildRecipientUnsubscribeUrl({
-				baseUrl: unsubscribeBaseUrl,
-				secret: unsubscribeSecret,
-				email: recipientEmail,
-				staticUrl: unsubscribeUrl,
-			});
-			const recipientWithComputedUrls = generatedUnsubscribeUrl
-				? { ...recipient, unsubscribeUrl: generatedUnsubscribeUrl }
-				: recipient;
-
-			if (!messageSubject) {
-				failures.push({
-					email: recipientEmail,
-					reason: 'Missing subject. Add `export const subject = "..."` to template, set --subject, or add subject column',
-				});
-				return;
-			}
-
-			try {
-				const messageId = await sendWithRetry({
-					ses,
-					from,
-					fromName,
-					templateComponent: templateModule.default,
-					recipient: recipientWithComputedUrls,
-					subject: messageSubject,
-					maxAttempts,
-					baseDelayMs,
-					configurationSet,
-					rateLimiter,
-					unsubscribeUrl: generatedUnsubscribeUrl,
-				});
-
-				alreadySentEmails.add(normalizedRecipientEmail);
-				await appendSentRecord(sentLogFile, {
-					email: normalizedRecipientEmail,
-					messageId,
-					timestamp: new Date().toISOString(),
-					subscriberSnapshotSha256,
-				});
-				sent++;
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				failures.push({ email: recipientEmail, reason });
-			}
+		const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
+		const rawSubject = templateSubject ?? subject ?? rowSubject;
+		const messageSubject = rawSubject ? applyPlaceholders(rawSubject, recipient) : undefined;
+		const generatedUnsubscribeUrl = buildRecipientUnsubscribeUrl({
+			baseUrl: unsubscribeBaseUrl,
+			secret: unsubscribeSecret,
+			email: recipientEmail,
+			staticUrl: unsubscribeUrl,
 		});
+		const recipientWithComputedUrls = generatedUnsubscribeUrl
+			? { ...recipient, unsubscribeUrl: generatedUnsubscribeUrl }
+			: recipient;
+
+		if (!messageSubject) {
+			failures.push({
+				email: recipientEmail,
+				reason: 'Missing subject. Add `export const subject = "..."` to template, set --subject, or add subject column',
+			});
+			return;
+		}
+
+		try {
+			const messageId = await sendWithRetry({
+				ses,
+				from,
+				fromName,
+				templateComponent: templateModule.default,
+				recipient: recipientWithComputedUrls,
+				subject: messageSubject,
+				maxAttempts,
+				baseDelayMs,
+				configurationSet,
+				rateLimiter,
+				unsubscribeUrl: generatedUnsubscribeUrl,
+				dev,
+			});
+
+			await checkpointSentMessage(sentLogFile, {
+				email: normalizedRecipientEmail,
+				campaignId,
+				messageId,
+				timestamp: new Date().toISOString(),
+				subscriberSnapshotSha256,
+			});
+			alreadySentEmails.add(normalizedRecipientEmail);
+			sent++;
+		} catch (error) {
+			if (error instanceof SentLogCheckpointError) throw error;
+			const reason = error instanceof Error ? error.message : String(error);
+			failures.push({ email: recipientEmail, reason });
+		}
+	});
 
 	const nextStart = i + batch.length;
-	if (nextStart < recipients.length && batchDelayMs > 0) {
+	if (nextStart < pendingRecipients.length && batchDelayMs > 0) {
 		console.info(
-			`Batch complete (${nextStart}/${recipients.length}). Waiting ${batchDelayMs}ms before next batch...`,
+			`Batch complete (${nextStart}/${pendingRecipients.length}). Waiting ${batchDelayMs}ms before next batch...`,
 		);
 		await sleep(batchDelayMs);
 	}
@@ -438,222 +547,7 @@ if (failures.length > 0) {
 	for (const failure of failures) {
 		console.error(`- ${failure.email}: ${failure.reason}`);
 	}
-}
-
-type SendWithRetryInput = {
-	ses: SESv2Client;
-	from: string;
-	fromName?: string;
-	templateComponent: (props: TemplateProps) => React.ReactElement;
-	recipient: TemplateProps;
-	subject: string;
-	maxAttempts: number;
-	baseDelayMs: number;
-	configurationSet?: string;
-	rateLimiter: RateLimiter;
-	unsubscribeUrl?: string;
-};
-
-async function sendWithRetry(input: SendWithRetryInput): Promise<string | undefined> {
-	const {
-		ses,
-		from,
-		fromName,
-		templateComponent,
-		recipient,
-		subject,
-		maxAttempts,
-		baseDelayMs,
-		configurationSet,
-		rateLimiter,
-		unsubscribeUrl,
-	} = input;
-
-	const toAddress = String(recipient.email);
-	const fromAddress = fromName ? `${fromName} <${from}>` : from;
-	const renderedHtml = await render(React.createElement(templateComponent, recipient));
-	const html = applyPlaceholders(renderedHtml, recipient);
-	const text = convert(html, {
-		wordwrap: 120,
-		selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
-	});
-
-	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-		try {
-			await rateLimiter.acquire();
-
-			const headers = unsubscribeUrl
-				? [
-						{ Name: "List-Unsubscribe", Value: `<${unsubscribeUrl}>` },
-						{ Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
-					]
-				: undefined;
-
-			const command = new SendEmailCommand({
-				FromEmailAddress: fromAddress,
-				Destination: {
-					ToAddresses: [toAddress],
-				},
-				Content: {
-					Simple: {
-						Subject: { Data: subject, Charset: "UTF-8" },
-						Body: {
-							Html: { Data: html, Charset: "UTF-8" },
-							Text: { Data: text, Charset: "UTF-8" },
-						},
-						Headers: headers,
-					},
-				},
-				ConfigurationSetName: configurationSet,
-			});
-
-			const result = await ses.send(command);
-			if (dev) {
-				console.info(`Sent to ${toAddress}: ${result.MessageId ?? "<no-id>"}`);
-			}
-			return result.MessageId;
-		} catch (error) {
-			const shouldRetry = isRetryableSesError(error);
-			const isLastAttempt = attempt === maxAttempts;
-
-			if (!shouldRetry || isLastAttempt) {
-				throw error;
-			}
-
-			const delay = computeBackoffDelay(baseDelayMs, attempt);
-			console.warn(
-				`Retrying ${toAddress} after error (attempt ${attempt}/${maxAttempts}). Waiting ${delay}ms...`,
-			);
-			await sleep(delay);
-		}
-	}
-}
-
-type SentLogRecord = {
-	email: string;
-	messageId?: string;
-	timestamp: string;
-	subscriberSnapshotSha256?: string;
-};
-
-async function loadSentEmailSet(logFile: string): Promise<Set<string>> {
-	const result = new Set<string>();
-
-	if (!(await fs.pathExists(logFile))) {
-		return result;
-	}
-
-	const content = await fs.readFile(logFile, "utf8");
-	for (const line of content.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) {
-			continue;
-		}
-
-		try {
-			const parsed = JSON.parse(trimmed) as { email?: unknown };
-			if (typeof parsed.email === "string" && parsed.email.trim().length > 0) {
-				result.add(parsed.email.trim().toLowerCase());
-			}
-		} catch {
-			continue;
-		}
-	}
-
-	return result;
-}
-
-async function appendSentRecord(logFile: string, record: SentLogRecord): Promise<void> {
-	await fs.ensureFile(logFile);
-	await fs.appendFile(logFile, `${JSON.stringify(record)}\n`, "utf8");
-}
-
-type RateLimiter = {
-	acquire: () => Promise<void>;
-};
-
-function createPerSecondRateLimiter(maxPerSecond: number): RateLimiter {
-	let timestamps: number[] = [];
-
-	return {
-		acquire: async () => {
-			while (true) {
-				const now = Date.now();
-				timestamps = timestamps.filter(ts => now - ts < 1000);
-
-				if (timestamps.length < maxPerSecond) {
-					timestamps.push(now);
-					return;
-				}
-
-				const oldest = timestamps[0];
-				const waitMs = Math.max(1, 1000 - (now - oldest));
-				await sleep(waitMs);
-			}
-		},
-	};
-}
-
-function isRetryableSesError(error: unknown): boolean {
-	if (!error || typeof error !== "object") {
-		return false;
-	}
-
-	const maybeAwsError = error as {
-		name?: string;
-		$metadata?: { httpStatusCode?: number };
-	};
-
-	const statusCode = maybeAwsError.$metadata?.httpStatusCode;
-	if (statusCode && statusCode >= 500) {
-		return true;
-	}
-
-	const retryableNames = new Set([
-		"Throttling",
-		"ThrottlingException",
-		"TooManyRequestsException",
-		"ServiceUnavailableException",
-		"InternalServiceError",
-		"RequestTimeout",
-	]);
-
-	return retryableNames.has(maybeAwsError.name ?? "");
-}
-
-function computeBackoffDelay(baseDelayMs: number, attempt: number): number {
-	const exponential = baseDelayMs * 2 ** (attempt - 1);
-	const jitter = Math.floor(Math.random() * baseDelayMs);
-	return Math.min(exponential + jitter, 30_000);
-}
-
-type BuildRecipientUnsubscribeUrlInput = {
-	baseUrl?: string;
-	secret?: string;
-	email: string;
-	staticUrl?: string;
-};
-
-function buildRecipientUnsubscribeUrl(input: BuildRecipientUnsubscribeUrlInput): string | undefined {
-	const { baseUrl, secret, email, staticUrl } = input;
-
-	if (baseUrl && secret) {
-		const normalizedEmail = email.trim().toLowerCase();
-		const payload = JSON.stringify({ email: normalizedEmail, iat: Date.now() });
-		const payloadB64 = base64UrlEncode(payload);
-		const signatureB64 = base64UrlEncode(createHmac("sha256", secret).update(payloadB64).digest());
-		const token = `${payloadB64}.${signatureB64}`;
-		const url = new URL(baseUrl);
-		url.searchParams.set("t", token);
-		return url.toString();
-	}
-
-	return staticUrl;
-}
-
-function base64UrlEncode(input: string | Buffer): string {
-	const base64 = Buffer.isBuffer(input) ? input.toString("base64") : Buffer.from(input, "utf8").toString("base64");
-	return base64.replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+	process.exitCode = 1;
 }
 
 async function processWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
@@ -664,90 +558,21 @@ async function processWithConcurrency<T>(items: T[], limit: number, worker: (ite
 	const effectiveLimit = Math.max(1, Math.min(limit, items.length));
 	let cursor = 0;
 
+	let fatalError: unknown;
 	const runners = Array.from({ length: effectiveLimit }, async () => {
-		while (cursor < items.length) {
+		while (cursor < items.length && fatalError === undefined) {
 			const index = cursor;
 			cursor++;
-			await worker(items[index]);
+			try {
+				await worker(items[index]);
+			} catch (error) {
+				fatalError ??= error;
+			}
 		}
 	});
 
 	await Promise.all(runners);
-}
-
-type SuppressionCheckInput = {
-	endpointUrl: string;
-	bearerToken: string;
-};
-
-async function fetchSuppressedEmailSet(input: SuppressionCheckInput): Promise<Set<string>> {
-	const { endpointUrl, bearerToken } = input;
-	const result = new Set<string>();
-	let cursor: string | undefined;
-
-	for (let page = 0; page < 10_000; page++) {
-		const url = new URL(endpointUrl);
-		url.searchParams.set("suppressed", "1");
-		url.searchParams.set("limit", "1000");
-		if (cursor) {
-			url.searchParams.set("cursor", cursor);
-		}
-
-		const response = await fetch(url, {
-			method: "GET",
-			headers: {
-				Authorization: `Bearer ${bearerToken}`,
-				Accept: "application/json",
-			},
-		});
-
-		if (!response.ok) {
-			throw new Error(`Suppression sync endpoint returned ${response.status}`);
-		}
-
-		const payload = (await response.json()) as {
-			emails?: unknown;
-			cursor?: unknown;
-			done?: unknown;
-		};
-
-		if (!Array.isArray(payload.emails)) {
-			throw new TypeError("Suppression sync endpoint returned invalid emails payload");
-		}
-
-		for (const value of payload.emails) {
-			if (typeof value === "string" && value.trim().length > 0) {
-				result.add(value.trim().toLowerCase());
-			}
-		}
-
-		const done = payload.done === true;
-		const nextCursor = typeof payload.cursor === "string" && payload.cursor.length > 0 ? payload.cursor : undefined;
-
-		if (done || !nextCursor) {
-			break;
-		}
-
-		cursor = nextCursor;
-	}
-
-	return result;
-}
-
-function applyPlaceholders(input: string, values: TemplateProps): string {
-	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
-		const value = values[key];
-
-		if (value === undefined || value === null) {
-			return "";
-		}
-
-		if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-			return String(value);
-		}
-
-		return "";
-	});
+	if (fatalError !== undefined) throw fatalError;
 }
 
 function sleep(ms: number): Promise<void> {
