@@ -48,23 +48,28 @@ const DEFAULT_MAX_CSV_BYTES = 25 * 1024 * 1024;
 
 const program = new Command()
 	.name("bulk-email")
-	.description("Validate, preview, and send Hack the Hill email campaigns through AWS SES");
+	.description("Preflight, preview, and send Hack the Hill email campaigns through AWS SES");
 
 addCommonOptions(program.command("send", { isDefault: true }))
-	.description("Preflight and send a campaign")
+	.description("Preflight and send one campaign")
 	.option("--campaign-id <campaignId>", "Stable identifier used to resume a campaign")
 	.option("--purpose <purpose>", "Required non-promotional event/service purpose for provided-CSV templates")
 	.option("--state-dir <stateDir>", "Campaign state root", ".bulk-email/campaigns")
 	.option("--dry-run", "Validate and summarize without sending")
-	.option("--yes", "Skip final interactive confirmation")
+	.option("--yes", "Skip the final confirmation prompt")
 	.action(async options => runSend(options));
 
 addCommonOptions(program.command("test"))
-	.description("Send one exact-path test message")
+	.description("Send one real test message immediately")
 	.requiredOption("--to <email>", "Test recipient")
 	.action(async options => runTest(options));
 
-await program.parseAsync();
+try {
+	await program.parseAsync();
+} catch (error) {
+	console.error(`Error: ${errorMessage(error)}`);
+	process.exitCode = 1;
+}
 
 function addCommonOptions(command: Command): Command {
 	return command
@@ -82,8 +87,10 @@ function addCommonOptions(command: Command): Command {
 		.option("--unsubscribe-base-url <unsubscribeBaseUrl>", "Canonical unsubscribe endpoint")
 		.option("--unsubscribe-active-key-id <unsubscribeActiveKeyId>", "Active unsubscribe signing key ID")
 		.option("--unsubscribe-token-keys <unsubscribeTokenKeys>", "Versioned unsubscribe keyring JSON")
-		.option("--unsubscribe-secret <unsubscribeSecret>", "Legacy transition signing secret")
-		.option("--suppression-check-url <suppressionCheckUrl>", "Authenticated email-list-manager suppression endpoint")
+		.option(
+			"--suppression-check-url <suppressionCheckUrl>",
+			"Authenticated email-list-manager suppression endpoint",
+		)
 		.option("--suppression-check-token <suppressionCheckToken>", "Suppression endpoint bearer token")
 		.option("--max-per-second <maxPerSecond>", "Maximum SES attempts per second", Number)
 		.option("--concurrency <concurrency>", "Concurrent sends", Number)
@@ -115,7 +122,6 @@ type ResolvedOptions = {
 	unsubscribeBaseUrl?: string;
 	unsubscribeActiveKeyId?: string;
 	unsubscribeKeyring: Record<string, string>;
-	unsubscribeLegacySecret?: string;
 	suppressionCheckUrl?: string;
 	suppressionCheckToken?: string;
 	maxPerSecond: number;
@@ -147,20 +153,28 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 	if (deduplicated.recipients.length > options.renderLimits.maxRecipients) {
 		throw new Error(`Campaign exceeds the ${options.renderLimits.maxRecipients}-recipient limit`);
 	}
-	if (deduplicated.duplicates > 0) console.info(`Removed ${deduplicated.duplicates} duplicate recipient row(s).`);
+	if (deduplicated.duplicates > 0)
+		console.info(
+			`Excluded ${deduplicated.duplicates} duplicate recipient row(s); kept the first row for each address.`,
+		);
 
 	const ses = createSesClient(options);
 	const identity = options.from.slice(options.from.lastIndexOf("@") + 1).toLowerCase();
-	console.info(`Checking SES account, identity ${identity}, and configuration set ${options.configurationSet}...`);
+	console.info(
+		`Checking SES account access, sending identity ${identity}, and configuration set ${options.configurationSet}...`,
+	);
 	const preflight = await verifySesPreflight({ client: ses, identity, configurationSet: options.configurationSet });
 	const effectiveMaxPerSecond = preflight.maxSendRate
 		? Math.max(1, Math.min(options.maxPerSecond, preflight.maxSendRate))
 		: options.maxPerSecond;
 
+	console.info("Loading SES bounce and complaint suppressions...");
 	const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
-	let listSuppressions = templateModule.metadata.audience === "subscribers"
-		? await fetchListSuppressions(options)
-		: new Set<string>();
+	let listSuppressions = new Set<string>();
+	if (templateModule.metadata.audience === "subscribers") {
+		console.info("Loading email-list-manager suppressions...");
+		listSuppressions = await fetchListSuppressions(options);
+	}
 
 	const state = await createCampaignState(String(rawOptions.stateDir ?? ".bulk-email/campaigns"), campaignId);
 	const releaseLock = dryRun ? async () => undefined : await acquireCampaignLock(state);
@@ -168,6 +182,7 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 		const accepted = dryRun ? new Set<string>() : await loadAcceptedRecipientDigests(state.acceptedFile, campaignId);
 		if (!dryRun) await validateFailureLog(state.failuresFile, campaignId);
 		const filtered = filterRecipients(deduplicated.recipients, accepted, listSuppressions, sesSuppressions);
+		console.info(`Rendering and validating ${filtered.pending.length} pending recipient message(s)...`);
 		const messages = await renderCampaign({
 			template: templateModule,
 			recipients: filtered.pending,
@@ -194,29 +209,34 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 			suppressedRecipients: filtered.suppressed,
 			createdAt: new Date().toISOString(),
 		};
-		console.info([
-			`Campaign ${campaignId}`,
-			`  Template: ${templateModule.metadata.id} v${templateModule.metadata.version}`,
-			`  Audience: ${templateModule.metadata.audience}`,
-			`  Unique recipients: ${deduplicated.recipients.length}`,
-			`  Already accepted: ${filtered.alreadyAccepted}`,
-			`  Suppressed by email-list-manager: ${filtered.listSuppressed}`,
-			`  Suppressed by SES: ${filtered.sesSuppressed}`,
-			`  Suppressed total: ${filtered.suppressed}`,
-			`  Pending: ${messages.length}`,
-			`  Sender: ${options.fromName ? `${options.fromName} <${options.from}>` : options.from}`,
-			`  Reply-To: ${options.replyTo}`,
-			`  Configuration set: ${options.configurationSet}`,
-			`  Purpose: ${purpose ?? "subscribed updates"}`,
-		].join("\n"));
+		console.info(
+			[
+				`Campaign ${campaignId}`,
+				`  Template: ${templateModule.metadata.id} v${templateModule.metadata.version}`,
+				`  Subject: ${templateModule.metadata.subject}`,
+				`  Audience: ${templateModule.metadata.audience}`,
+				`  Unique recipients: ${deduplicated.recipients.length}`,
+				`  Already accepted: ${filtered.alreadyAccepted}`,
+				`  Suppressed by email-list-manager: ${filtered.listSuppressed}`,
+				`  Suppressed by SES: ${filtered.sesSuppressed}`,
+				`  Suppressed total: ${filtered.suppressed}`,
+				`  Pending: ${messages.length}`,
+				`  Sender: ${options.fromName ? `${options.fromName} <${options.from}>` : options.from}`,
+				`  Reply-To: ${options.replyTo}`,
+				`  Configuration set: ${options.configurationSet}`,
+				`  Purpose: ${purpose ?? "subscriber updates"}`,
+			].join("\n"),
+		);
 
 		if (dryRun) {
-			console.info("Dry run complete; every pending recipient rendered successfully and no messages were sent.");
+			console.info(
+				`Dry run complete. Preflight passed for ${messages.length} pending recipient(s); no email was sent.`,
+			);
 			return;
 		}
 		await writeOrValidateManifest(state.manifestFile, manifest);
 		if (messages.length === 0) {
-			console.info("No pending recipients remain.");
+			console.info("No pending recipients remain; no email was sent.");
 			return;
 		}
 		const confirmed = await confirmCampaignSend({
@@ -232,7 +252,7 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 			})).confirmed,
 		});
 		if (!confirmed) {
-			console.info("Campaign cancelled; no messages were sent.");
+			console.info("Campaign cancelled. No email was sent.");
 			return;
 		}
 		await markManifestConfirmed(state.manifestFile);
@@ -248,7 +268,9 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 				? async () => { listSuppressions = await fetchListSuppressions(options); return listSuppressions; }
 				: undefined,
 		});
-		console.info(`Done. Sent: ${result.sent}, Newly suppressed: ${result.suppressed}, Failed: ${result.failed}`);
+		console.info(
+			`Delivery complete. SES accepted: ${result.sent}; skipped after suppression refresh: ${result.suppressed}; failed: ${result.failed}.`,
+		);
 		if (result.failed > 0) process.exitCode = 1;
 	} finally {
 		await releaseLock();
@@ -281,7 +303,7 @@ async function runTest(rawOptions: OptionValues): Promise<void> {
 	const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
 	if (sesSuppressions.has(to)) throw new Error("The test recipient is on the SES suppression list");
 	const messageId = await sendRendered(message, options, ses, createPerSecondRateLimiter(1));
-	console.info(`SES accepted the exact-path test message (${messageId ?? "no message ID"}).`);
+	console.info(`SES accepted the test message (message ID: ${messageId ?? "not returned"}).`);
 }
 
 async function resolveOptions(raw: OptionValues): Promise<ResolvedOptions> {
@@ -332,7 +354,6 @@ async function resolveOptions(raw: OptionValues): Promise<ResolvedOptions> {
 		unsubscribeBaseUrl: String(raw.unsubscribeBaseUrl ?? env.UNSUBSCRIBE_BASE_URL ?? "") || undefined,
 		unsubscribeActiveKeyId: activeKeyId,
 		unsubscribeKeyring: keyring,
-		unsubscribeLegacySecret: String(raw.unsubscribeSecret ?? env.UNSUBSCRIBE_SECRET ?? "") || undefined,
 		suppressionCheckUrl: String(raw.suppressionCheckUrl ?? env.SUPPRESSION_CHECK_URL ?? "") || undefined,
 		suppressionCheckToken: String(raw.suppressionCheckToken ?? env.SUPPRESSION_CHECK_TOKEN ?? "") || undefined,
 		...numeric,
@@ -479,7 +500,6 @@ function buildUnsubscribeUrl(options: ResolvedOptions, email: string): string | 
 		baseUrl: options.unsubscribeBaseUrl,
 		activeKeyId: options.unsubscribeActiveKeyId,
 		keyring: options.unsubscribeKeyring,
-		legacySecret: options.unsubscribeLegacySecret,
 		email,
 	});
 }
@@ -556,4 +576,8 @@ function sha256(value: string): string {
 
 function sleep(milliseconds: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

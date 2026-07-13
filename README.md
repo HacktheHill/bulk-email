@@ -57,8 +57,6 @@ SUPPRESSION_CHECK_TOKEN=...
 UNSUBSCRIBE_BASE_URL=https://emails.hackthehill.com/unsubscribe
 UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID=2026-07
 UNSUBSCRIBE_TOKEN_KEYS={"2026-07":"..."}
-# Retain only during the 60-day legacy-token transition:
-UNSUBSCRIBE_SECRET=...
 ```
 
 The signing keyring must match `email-list-manager`. Keep export and suppression bearer tokens separate.

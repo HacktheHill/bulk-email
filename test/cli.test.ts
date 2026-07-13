@@ -11,6 +11,9 @@ test("CLI exposes the unified send and exact-path test commands", async () => {
 	const root = await execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "--help"]);
 	assert.match(root.stdout, /send \[options\]/);
 	assert.match(root.stdout, /test \[options\]/);
+	const test = await execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "test", "--help"]);
+	assert.match(test.stdout, /real test message immediately/);
+	assert.doesNotMatch(test.stdout, /legacy|secret/i);
 });
 
 test("CLI returns a nonzero exit for invalid campaign configuration", async () => {

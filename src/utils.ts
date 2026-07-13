@@ -39,10 +39,9 @@ export function buildRecipientUnsubscribeUrl(input: {
 	baseUrl?: string;
 	activeKeyId?: string;
 	keyring?: Record<string, string>;
-	legacySecret?: string;
 	email: string;
 }): string | undefined {
-	const { baseUrl, activeKeyId, keyring, legacySecret, email } = input;
+	const { baseUrl, activeKeyId, keyring, email } = input;
 
 	if (baseUrl && activeKeyId && keyring?.[activeKeyId]) {
 		const payload = JSON.stringify({ email: normalizeEmail(email), iat: Date.now() });
@@ -52,15 +51,6 @@ export function buildRecipientUnsubscribeUrl(input: {
 		const token = `${signedValue}.${signatureB64}`;
 		const url = new URL(baseUrl);
 		url.searchParams.set("token", token);
-		return url.toString();
-	}
-
-	if (baseUrl && legacySecret) {
-		const payload = JSON.stringify({ email: normalizeEmail(email), iat: Date.now() });
-		const payloadB64 = base64UrlEncode(payload);
-		const signatureB64 = base64UrlEncode(createHmac("sha256", legacySecret).update(payloadB64).digest());
-		const url = new URL(baseUrl);
-		url.searchParams.set("token", `${payloadB64}.${signatureB64}`);
 		return url.toString();
 	}
 
