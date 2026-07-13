@@ -27,7 +27,7 @@ test("retries transient SES errors and includes one-click unsubscribe headers", 
 		baseDelayMs: 1,
 		configurationSet: "my-first-configuration-set",
 		rateLimiter: { acquire: async () => undefined },
-		unsubscribeUrl: "https://emails.hackthehill.com/unsubscribe?t=signed",
+	unsubscribeUrl: "https://emails.hackthehill.com/unsubscribe?token=signed",
 		sleep: async milliseconds => { sleeps.push(milliseconds); },
 	});
 
@@ -36,7 +36,7 @@ test("retries transient SES errors and includes one-click unsubscribe headers", 
 	assert.equal(sleeps.length, 1);
 	const headers = commands[1].input.Content?.Simple?.Headers;
 	assert.deepEqual(headers, [
-		{ Name: "List-Unsubscribe", Value: "<https://emails.hackthehill.com/unsubscribe?t=signed>" },
+		{ Name: "List-Unsubscribe", Value: "<https://emails.hackthehill.com/unsubscribe?token=signed>" },
 		{ Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
 	]);
 });

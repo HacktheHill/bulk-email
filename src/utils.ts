@@ -49,7 +49,7 @@ export function buildRecipientUnsubscribeUrl(input: {
 		const signatureB64 = base64UrlEncode(createHmac("sha256", secret).update(payloadB64).digest());
 		const token = `${payloadB64}.${signatureB64}`;
 		const url = new URL(baseUrl);
-		url.searchParams.set("t", token);
+		url.searchParams.set("token", token);
 		return url.toString();
 	}
 
