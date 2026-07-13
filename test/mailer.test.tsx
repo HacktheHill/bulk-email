@@ -40,3 +40,25 @@ test("retries transient SES errors and includes one-click unsubscribe headers", 
 		{ Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
 	]);
 });
+
+test("refuses to send an empty rendered message body", async () => {
+	let sendAttempts = 0;
+	const ses = {
+		send: async () => {
+			sendAttempts++;
+			return { MessageId: "should-not-send" };
+		},
+	} as unknown as Pick<SESv2Client, "send">;
+
+	await assert.rejects(sendWithRetry({
+		ses,
+		from: "info@hackthehill.com",
+		templateComponent: () => React.createElement(React.Fragment),
+		recipient: { email: "member@example.com" },
+		subject: "Update",
+		maxAttempts: 1,
+		baseDelayMs: 1,
+		rateLimiter: { acquire: async () => undefined },
+	}), /empty message body/);
+	assert.equal(sendAttempts, 0);
+});
