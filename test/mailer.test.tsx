@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SendEmailCommand, type SESv2Client } from "@aws-sdk/client-sesv2";
-import * as React from "react";
-import { sendWithRetry } from "../src/mailer.js";
+import { isAmbiguousSesError, sendWithRetry } from "../src/mailer.js";
 
 test("retries transient SES errors and includes one-click unsubscribe headers", async () => {
 	const commands: SendEmailCommand[] = [];
@@ -20,9 +19,11 @@ test("retries transient SES errors and includes one-click unsubscribe headers", 
 	const messageId = await sendWithRetry({
 		ses,
 		from: "info@hackthehill.com",
-		templateComponent: ({ email }) => React.createElement("p", null, String(email)),
-		recipient: { email: "member@example.com" },
+		replyTo: "info@hackthehill.com",
+		to: "member@example.com",
 		subject: "Update",
+		html: "<p>Update</p>",
+		text: "Update",
 		maxAttempts: 3,
 		baseDelayMs: 1,
 		configurationSet: "my-first-configuration-set",
@@ -39,6 +40,13 @@ test("retries transient SES errors and includes one-click unsubscribe headers", 
 		{ Name: "List-Unsubscribe", Value: "<https://emails.hackthehill.com/unsubscribe?token=signed>" },
 		{ Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
 	]);
+	assert.deepEqual(commands[1].input.ReplyToAddresses, ["info@hackthehill.com"]);
+});
+
+test("classifies transport timeouts and resets as ambiguous", () => {
+	assert.equal(isAmbiguousSesError({ name: "TimeoutError" }), true);
+	assert.equal(isAmbiguousSesError({ code: "ECONNRESET" }), true);
+	assert.equal(isAmbiguousSesError({ name: "BadRequestException" }), false);
 });
 
 test("refuses to send an empty rendered message body", async () => {
@@ -53,9 +61,10 @@ test("refuses to send an empty rendered message body", async () => {
 	await assert.rejects(sendWithRetry({
 		ses,
 		from: "info@hackthehill.com",
-		templateComponent: () => React.createElement(React.Fragment),
-		recipient: { email: "member@example.com" },
+		to: "member@example.com",
 		subject: "Update",
+		html: "",
+		text: "",
 		maxAttempts: 1,
 		baseDelayMs: 1,
 		rateLimiter: { acquire: async () => undefined },

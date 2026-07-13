@@ -1,580 +1,559 @@
 #!/usr/bin/env node
 
 import { SESv2Client } from "@aws-sdk/client-sesv2";
-import { render } from "@react-email/render";
-import { program } from "commander";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
+import { Command, type OptionValues } from "commander";
 import dotenv from "dotenv";
 import fs from "fs-extra";
 import inquirer from "inquirer";
 import { createHash } from "node:crypto";
-import * as React from "react";
-import { pathToFileURL } from "node:url";
+import path from "node:path";
 import { z } from "zod";
 import { confirmCampaignSend } from "./confirmation.js";
+import { processWithConcurrency } from "./concurrency.js";
 import { fetchCsvSnapshot, fetchSuppressedEmailSet } from "./list-service.js";
-import { applyPlaceholders, createPerSecondRateLimiter, sendWithRetry, type TemplateProps } from "./mailer.js";
-import { readRecipientCsv, readRecipientCsvText } from "./recipients.js";
-import { fetchSesSuppressedEmailSet, mergeSuppressionSets, verifySesPreflight } from "./ses-service.js";
-import { checkpointSentMessage, loadSentEmailSet, SentLogCheckpointError } from "./sent-log.js";
+import { createPerSecondRateLimiter, isAmbiguousSesError, sendWithRetry } from "./mailer.js";
+import { readRecipientCsv, readRecipientCsvText, type RecipientRecord } from "./recipients.js";
+import { renderCampaign, type RenderLimits, type RenderedMessage } from "./rendering.js";
+import { fetchSesSuppressedEmailSet, verifySesPreflight } from "./ses-service.js";
+import {
+	acquireCampaignLock,
+	appendFailureRecord,
+	checkpointSentMessage,
+	createCampaignState,
+	loadAcceptedRecipientDigests,
+	markManifestConfirmed,
+	recipientDigest,
+	SentLogCheckpointError,
+	validateFailureLog,
+	writeOrValidateManifest,
+	type CampaignManifest,
+} from "./sent-log.js";
+import { inspectTemplateRepository, loadTemplateModule, verifyTemplateDependencies } from "./template.js";
 import {
 	buildRecipientUnsubscribeUrl,
 	deduplicateRecipients,
 	isValidCampaignId,
 	normalizeEmail,
+	parseUnsubscribeKeyring,
 } from "./utils.js";
 
 dotenv.config();
-const { env } = process;
 
-type TemplateModule = {
-	default: (props: TemplateProps) => React.ReactElement;
-	subject?: string;
+const DEFAULT_MAX_RECIPIENTS = 10_000;
+const DEFAULT_MAX_HTML_BYTES = 256 * 1024;
+const DEFAULT_MAX_TEXT_BYTES = 128 * 1024;
+const DEFAULT_MAX_RENDERED_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_CSV_BYTES = 25 * 1024 * 1024;
+
+const program = new Command()
+	.name("bulk-email")
+	.description("Validate, preview, and send Hack the Hill email campaigns through AWS SES");
+
+addCommonOptions(program.command("send", { isDefault: true }))
+	.description("Preflight and send a campaign")
+	.option("--campaign-id <campaignId>", "Stable identifier used to resume a campaign")
+	.option("--purpose <purpose>", "Required non-promotional event/service purpose for provided-CSV templates")
+	.option("--state-dir <stateDir>", "Campaign state root", ".bulk-email/campaigns")
+	.option("--dry-run", "Validate and summarize without sending")
+	.option("--yes", "Skip final interactive confirmation")
+	.action(async options => runSend(options));
+
+addCommonOptions(program.command("test"))
+	.description("Send one exact-path test message")
+	.requiredOption("--to <email>", "Test recipient")
+	.action(async options => runTest(options));
+
+await program.parseAsync();
+
+function addCommonOptions(command: Command): Command {
+	return command
+		.option("-v, --dev", "Enable non-PII development logging")
+		.option("-d, --template-dir <templateDir>", "Directory containing the React Email template")
+		.option("-t, --template <template>", "React Email template filename")
+		.option("-c, --file <file>", "Provided recipient CSV or test fixture")
+		.option("--subscriber-export-url <subscriberExportUrl>", "Authenticated subscriber CSV export URL")
+		.option("--subscriber-export-token <subscriberExportToken>", "Subscriber export bearer token")
+		.option("-f, --from <from>", "Sender email address")
+		.option("--from-name <fromName>", "Sender display name")
+		.option("--reply-to <replyTo>", "Reply-To address")
+		.option("-r, --region <region>", "AWS SES region")
+		.option("--configuration-set <configurationSet>", "SES configuration set")
+		.option("--unsubscribe-base-url <unsubscribeBaseUrl>", "Canonical unsubscribe endpoint")
+		.option("--unsubscribe-active-key-id <unsubscribeActiveKeyId>", "Active unsubscribe signing key ID")
+		.option("--unsubscribe-token-keys <unsubscribeTokenKeys>", "Versioned unsubscribe keyring JSON")
+		.option("--unsubscribe-secret <unsubscribeSecret>", "Legacy transition signing secret")
+		.option("--suppression-check-url <suppressionCheckUrl>", "Authenticated email-list-manager suppression endpoint")
+		.option("--suppression-check-token <suppressionCheckToken>", "Suppression endpoint bearer token")
+		.option("--max-per-second <maxPerSecond>", "Maximum SES attempts per second", Number)
+		.option("--concurrency <concurrency>", "Concurrent sends", Number)
+		.option("--batch-size <batchSize>", "Messages per batch", Number)
+		.option("--batch-delay-ms <batchDelayMs>", "Delay between batches", Number)
+		.option("--max-attempts <maxAttempts>", "Safe retry attempts", Number)
+		.option("--base-delay-ms <baseDelayMs>", "Retry backoff base", Number)
+		.option("--fetch-timeout-ms <fetchTimeoutMs>", "Network timeout", Number)
+		.option("--max-csv-bytes <maxCsvBytes>", "Maximum recipient CSV bytes", Number)
+		.option("--max-suppression-page-bytes <maxSuppressionPageBytes>", "Maximum suppression page bytes", Number)
+		.option("--max-recipients <maxRecipients>", "Maximum unique recipients", Number)
+		.option("--max-html-bytes <maxHtmlBytes>", "Maximum HTML bytes per message", Number)
+		.option("--max-text-bytes <maxTextBytes>", "Maximum text bytes per message", Number)
+		.option("--max-rendered-bytes <maxRenderedBytes>", "Maximum total pre-rendered bytes", Number);
+}
+
+type ResolvedOptions = {
+	dev: boolean;
+	templateDir: string;
+	template: string;
+	file?: string;
+	subscriberExportUrl?: string;
+	subscriberExportToken?: string;
+	from: string;
+	fromName?: string;
+	replyTo: string;
+	region: string;
+	configurationSet: string;
+	unsubscribeBaseUrl?: string;
+	unsubscribeActiveKeyId?: string;
+	unsubscribeKeyring: Record<string, string>;
+	unsubscribeLegacySecret?: string;
+	suppressionCheckUrl?: string;
+	suppressionCheckToken?: string;
+	maxPerSecond: number;
+	concurrency: number;
+	batchSize: number;
+	batchDelayMs: number;
+	maxAttempts: number;
+	baseDelayMs: number;
+	fetchTimeoutMs: number;
+	maxCsvBytes: number;
+	maxSuppressionPageBytes: number;
+	renderLimits: RenderLimits;
 };
 
-// Parse the command line arguments
-let {
-	dev,
-	templateDir,
-	template,
-	file,
-	subscriberExportUrl,
-	subscriberExportToken,
-	from,
-	fromName,
-	subject,
-	region,
-	configurationSet,
-	unsubscribeBaseUrl,
-	unsubscribeSecret,
-	unsubscribeUrl,
-	suppressionCheckUrl,
-	suppressionCheckToken,
-	maxPerSecond,
-	sentLogFile,
-	concurrency,
-	batchSize,
-	batchDelayMs,
-	maxAttempts,
-	baseDelayMs,
-	campaignId,
-	dryRun,
-	fetchTimeoutMs,
-	maxExportBytes,
-	maxSuppressionPageBytes,
-	yes,
-} = program
-	.option("-v, --dev", "Run in development mode")
-	.option("-d, --template-dir <templateDir>", "The path to the templates directory")
-	.option("-t, --template <template>", "The React Email template filename to send")
-	.option("-c, --file <file>", "The CSV file to read")
-	.option(
-		"--subscriber-export-url <subscriberExportUrl>",
-		"Authenticated email list CSV export URL (takes the place of --file)",
-	)
-	.option(
-		"--subscriber-export-token <subscriberExportToken>",
-		"Bearer token for the authenticated email list CSV export",
-	)
-	.option("-f, --from <from>", "The email address to send from")
-	.option("--from-name <fromName>", "Display name for the sender (e.g. 'Daniel Thorp')")
-	.option("-s, --subject <subject>", "Fallback subject if row does not define subject")
-	.option("-r, --region <region>", "AWS SES region (defaults to AWS_REGION)")
-	.option("--configuration-set <configurationSet>", "SES configuration set name")
-	.option(
-		"--unsubscribe-base-url <unsubscribeBaseUrl>",
-		"Base URL for one-click unsubscribe endpoint (e.g. https://emails.hackthehill.com/unsubscribe)",
-	)
-	.option("--unsubscribe-secret <unsubscribeSecret>", "Secret used to sign unsubscribe tokens")
-	.option("--unsubscribe-url <unsubscribeUrl>", "URL for List-Unsubscribe header (RFC 8058)")
-	.option(
-		"--suppression-check-url <suppressionCheckUrl>",
-		"Authenticated URL used to sync suppression list (required)",
-	)
-	.option(
-		"--suppression-check-token <suppressionCheckToken>",
-		"Bearer token used for suppression sync endpoint authorization (required)",
-	)
-	.option("--max-per-second <maxPerSecond>", "Maximum SES send attempts per second", Number)
-	.option("--sent-log-file <sentLogFile>", "Path to JSONL file tracking successful sends")
-	.option("--concurrency <concurrency>", "Maximum concurrent sends per batch", Number)
-	.option("--batch-size <batchSize>", "How many emails to send per batch", Number)
-	.option("--batch-delay-ms <batchDelayMs>", "Delay between batches in milliseconds", Number)
-	.option("--max-attempts <maxAttempts>", "Retry attempts per email", Number)
-	.option("--base-delay-ms <baseDelayMs>", "Base retry delay in milliseconds", Number)
-	.option("--campaign-id <campaignId>", "Stable identifier used to scope resume logs (required)")
-	.option("--dry-run", "Download, validate, and summarize the campaign without sending")
-	.option("--fetch-timeout-ms <fetchTimeoutMs>", "Timeout for list service requests in milliseconds", Number)
-	.option("--max-export-bytes <maxExportBytes>", "Maximum CSV export size in bytes", Number)
-	.option(
-		"--max-suppression-page-bytes <maxSuppressionPageBytes>",
-		"Maximum suppression response page size in bytes",
-		Number,
-	)
-	.option("--yes", "Skip the final interactive send confirmation")
-	.parse()
-	.opts();
-
-dev ??= env.NODE_ENV === "development";
-subscriberExportUrl ??= env.SUBSCRIBER_EXPORT_URL;
-subscriberExportToken ??= env.SUBSCRIBER_EXPORT_TOKEN;
-region ??= env.AWS_REGION;
-subject ??= env.EMAIL_SUBJECT;
-fromName ??= env.EMAIL_FROM_NAME;
-unsubscribeBaseUrl ??= env.UNSUBSCRIBE_BASE_URL;
-unsubscribeSecret ??= env.UNSUBSCRIBE_SECRET;
-unsubscribeUrl ??= env.UNSUBSCRIBE_URL;
-suppressionCheckUrl ??= env.SUPPRESSION_CHECK_URL;
-suppressionCheckToken ??= env.SUPPRESSION_CHECK_TOKEN;
-maxPerSecond ??= Number(env.SES_MAX_PER_SECOND ?? 14);
-sentLogFile ??= env.SENT_LOG_FILE;
-concurrency ??= Number(env.SEND_CONCURRENCY ?? 25);
-batchSize ??= Number(env.BATCH_SIZE ?? 10);
-batchDelayMs ??= Number(env.BATCH_DELAY_MS ?? 1200);
-maxAttempts ??= Number(env.MAX_ATTEMPTS ?? 5);
-baseDelayMs ??= Number(env.BASE_DELAY_MS ?? 500);
-configurationSet ??= env.SES_CONFIGURATION_SET;
-campaignId ??= env.CAMPAIGN_ID;
-fetchTimeoutMs ??= Number(env.FETCH_TIMEOUT_MS ?? 15_000);
-maxExportBytes ??= Number(env.MAX_EXPORT_BYTES ?? 25 * 1024 * 1024);
-maxSuppressionPageBytes ??= Number(env.MAX_SUPPRESSION_PAGE_BYTES ?? 2 * 1024 * 1024);
-
-if (!campaignId || !isValidCampaignId(campaignId)) {
-	throw new Error(
-		"campaign-id is required and must contain only letters, numbers, dots, underscores, or hyphens (maximum 128 characters)",
-	);
-}
-
-if (!Number.isInteger(fetchTimeoutMs) || fetchTimeoutMs <= 0) {
-	throw new Error("fetch-timeout-ms must be a positive integer");
-}
-
-if (!Number.isInteger(maxExportBytes) || maxExportBytes <= 0) {
-	throw new Error("max-export-bytes must be a positive integer");
-}
-
-if (!Number.isInteger(maxSuppressionPageBytes) || maxSuppressionPageBytes <= 0) {
-	throw new Error("max-suppression-page-bytes must be a positive integer");
-}
-
-sentLogFile ??= env.SENT_LOG_FILE ?? `.sent-emails-${campaignId}.jsonl`;
-
-// Ask for the template directory
-templateDir ??= (
-	await inquirer.prompt<{ templateDir: string }>({
-		name: "templateDir",
-		type: "input",
-		message: "Enter the path to the templates directory",
-		default: "templates",
-	})
-)?.templateDir;
-// Validate the template directory
-if (!templateDir || !(await fs.pathExists(templateDir))) {
-	throw new Error("Please specify the templates directory");
-}
-
-// Ask for the template
-const choices = (await fs.readdir(templateDir)).filter(name => /\.(tsx|ts|jsx|js)$/i.test(name));
-
-if (choices.length === 0) {
-	throw new Error("No React Email template files were found in the templates directory");
-}
-
-template ??= (
-	await inquirer.prompt<{ template: string }>({
-		name: "template",
-		type: "list",
-		message: "Which React Email template do you want to use?",
-		choices,
-	})
-)?.template;
-// Validate the template
-if (!template || !choices.includes(template)) {
-	throw new Error("Please specify the template to send");
-}
-
-const templatePath = `${templateDir}/${template}`;
-
-let subscriberSnapshotSha256: string | undefined;
-let subscriberSnapshotCsv: string | undefined;
-
-if (subscriberExportUrl && file) {
-	throw new Error("Use either --file or --subscriber-export-url, not both");
-}
-
-if (!subscriberExportUrl && subscriberExportToken) {
-	throw new Error("--subscriber-export-token requires --subscriber-export-url");
-}
-
-if (subscriberExportUrl) {
-	const parsed = z.string().url().safeParse(subscriberExportUrl);
-	if (!parsed.success || !subscriberExportToken) {
-		throw new Error(
-			"Both --subscriber-export-url and --subscriber-export-token (or SUBSCRIBER_EXPORT_URL and SUBSCRIBER_EXPORT_TOKEN) are required",
-		);
+async function runSend(rawOptions: OptionValues): Promise<void> {
+	const campaignId = String(rawOptions.campaignId ?? process.env.CAMPAIGN_ID ?? "");
+	if (!isValidCampaignId(campaignId)) {
+		throw new Error("campaign-id is required and must contain only letters, numbers, dots, underscores, or hyphens");
 	}
+	const options = await resolveOptions(rawOptions);
+	const templatePath = path.join(options.templateDir, options.template);
+	const templateModule = await loadTemplateModule(templatePath);
+	const dryRun = Boolean(rawOptions.dryRun);
+	const repository = await inspectTemplateRepository(templatePath, { requireClean: !dryRun });
+	await verifyTemplateDependencies(repository.packageJsonPath, path.resolve("package.json"));
 
-	subscriberSnapshotCsv = await fetchCsvSnapshot({
-		url: subscriberExportUrl,
-		token: subscriberExportToken,
-		timeoutMs: fetchTimeoutMs,
-		maxBytes: maxExportBytes,
-	});
-	if (!subscriberSnapshotCsv.trim()) {
-		throw new Error("Subscriber export endpoint returned an empty response");
+	const source = await loadCampaignRecipients(templateModule.metadata.audience, options);
+	const deduplicated = deduplicateRecipients(source.recipients);
+	if (deduplicated.recipients.length > options.renderLimits.maxRecipients) {
+		throw new Error(`Campaign exceeds the ${options.renderLimits.maxRecipients}-recipient limit`);
 	}
+	if (deduplicated.duplicates > 0) console.info(`Removed ${deduplicated.duplicates} duplicate recipient row(s).`);
 
-	subscriberSnapshotSha256 = createHash("sha256").update(subscriberSnapshotCsv, "utf8").digest("hex");
-	console.info(`Downloaded subscriber CSV snapshot (${subscriberSnapshotSha256})`);
-} else {
-	// Ask for a local CSV file when an authenticated export is not configured.
-	file ??= (
-		await inquirer.prompt<{ file: string }>({
-			name: "file",
-			type: "input",
-			message: "Enter the path to a CSV file with name, email, and language columns",
-			default: "emails.csv",
-		})
-	)?.file;
-}
+	const ses = createSesClient(options);
+	const identity = options.from.slice(options.from.lastIndexOf("@") + 1).toLowerCase();
+	console.info(`Checking SES account, identity ${identity}, and configuration set ${options.configurationSet}...`);
+	const preflight = await verifySesPreflight({ client: ses, identity, configurationSet: options.configurationSet });
+	const effectiveMaxPerSecond = preflight.maxSendRate
+		? Math.max(1, Math.min(options.maxPerSecond, preflight.maxSendRate))
+		: options.maxPerSecond;
 
-// Validate the CSV file
-if (!subscriberSnapshotCsv && (!file || !(await fs.pathExists(file)) || !z.string().endsWith(".csv").safeParse(file).success)) {
-	throw new Error("Please specify a CSV file to read");
-}
+	const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
+	let listSuppressions = templateModule.metadata.audience === "subscribers"
+		? await fetchListSuppressions(options)
+		: new Set<string>();
 
-// Ask only if sender address is not provided via CLI/env.
-if (!from) {
-	const envFrom = env.EMAIL_FROM;
-	if (envFrom && z.string().email().safeParse(envFrom).success) {
-		from = envFrom;
-	} else {
-		from = (
-			await inquirer.prompt<{ from: string }>({
-				name: "from",
-				type: "input",
-				message: "Enter the email address to send from",
-				default: env.EMAIL_FROM,
-			})
-		)?.from;
-	}
-}
-// Validate the email address to send from
-if (!from || !z.string().email().safeParse(from).success) {
-	throw new Error("Please specify an email address to send from");
-}
-
-if (!region || !z.string().min(1).safeParse(region).success) {
-	throw new Error("Please specify AWS region (e.g. us-east-1)");
-}
-
-if (!configurationSet) {
-	throw new Error("Please specify the SES configuration set");
-}
-
-if (!Number.isFinite(batchSize) || batchSize <= 0) {
-	throw new Error("batch-size must be a positive number");
-}
-
-if (!Number.isFinite(batchDelayMs) || batchDelayMs < 0) {
-	throw new Error("batch-delay-ms must be zero or a positive number");
-}
-
-if (!Number.isFinite(maxAttempts) || maxAttempts <= 0) {
-	throw new Error("max-attempts must be a positive number");
-}
-
-if (!Number.isFinite(baseDelayMs) || baseDelayMs <= 0) {
-	throw new Error("base-delay-ms must be a positive number");
-}
-
-if (!Number.isFinite(maxPerSecond) || maxPerSecond <= 0) {
-	throw new Error("max-per-second must be a positive number");
-}
-
-if (!Number.isFinite(concurrency) || concurrency <= 0) {
-	throw new Error("concurrency must be a positive number");
-}
-
-if ((unsubscribeBaseUrl && !unsubscribeSecret) || (!unsubscribeBaseUrl && unsubscribeSecret)) {
-	throw new Error(
-		"When using tokenized unsubscribe, both --unsubscribe-base-url and --unsubscribe-secret are required",
-	);
-}
-
-if (unsubscribeBaseUrl) {
-	const parsed = z.string().url().safeParse(unsubscribeBaseUrl);
-	if (!parsed.success) {
-		throw new Error("unsubscribe-base-url must be a valid URL");
-	}
-}
-
-if (unsubscribeUrl) {
-	const parsed = z.string().url().safeParse(unsubscribeUrl);
-	if (!parsed.success) {
-		throw new Error("unsubscribe-url must be a valid URL");
-	}
-}
-
-if (!suppressionCheckUrl || !suppressionCheckToken) {
-	throw new Error(
-		"Suppression sync is required. Set both --suppression-check-url and --suppression-check-token (or SUPPRESSION_CHECK_URL and SUPPRESSION_CHECK_TOKEN)",
-	);
-}
-
-const suppressionUrlResult = z.string().url().safeParse(suppressionCheckUrl);
-if (!suppressionUrlResult.success) {
-	throw new Error("suppression-check-url must be a valid URL");
-}
-
-const templateModule = (await import(pathToFileURL(templatePath).toString())) as TemplateModule;
-if (typeof templateModule.default !== "function") {
-	throw new TypeError(`Template ${template} must export a default React component`);
-}
-
-const templateSubject = typeof templateModule.subject === "string" ? templateModule.subject : undefined;
-
-const ses = new SESv2Client({ region });
-
-const sesIdentity = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
-console.info(`Checking SES account, identity ${sesIdentity}, and configuration set ${configurationSet}...`);
-await verifySesPreflight({ client: ses, identity: sesIdentity, configurationSet });
-
-const recipients: TemplateProps[] = subscriberSnapshotCsv
-	? readRecipientCsvText(subscriberSnapshotCsv)
-	: await readRecipientCsv(file!);
-
-const deduplicated = deduplicateRecipients(recipients as Array<{ email: string; [key: string]: unknown }>);
-const uniqueRecipients = deduplicated.recipients as TemplateProps[];
-if (deduplicated.duplicates > 0) {
-	console.info(`Removed ${deduplicated.duplicates} duplicate recipient row(s).`);
-}
-
-if (uniqueRecipients.length === 0) {
-	console.info("No recipients were found in CSV");
-	process.exit(0);
-}
-
-const alreadySentEmails = await loadSentEmailSet(sentLogFile, campaignId);
-console.info(`Loaded ${alreadySentEmails.size} already-sent address(es) from ${sentLogFile}.`);
-
-console.info("Syncing email-list-manager and SES suppression lists...");
-const listManagerSuppressions = await fetchSuppressedEmailSet({
-	endpointUrl: suppressionCheckUrl,
-	bearerToken: suppressionCheckToken,
-	timeoutMs: fetchTimeoutMs,
-	maxPageBytes: maxSuppressionPageBytes,
-});
-const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
-const suppressedEmails = mergeSuppressionSets(listManagerSuppressions, sesSuppressions);
-console.info(
-	`Suppression sync complete: ${listManagerSuppressions.size} email-list-manager, ${sesSuppressions.size} SES, ${suppressedEmails.size} unique.`,
-);
-
-const pendingRecipients: TemplateProps[] = [];
-let skippedAlreadySent = 0;
-let skippedSuppressed = 0;
-let skippedListManagerSuppressed = 0;
-let skippedSesSuppressed = 0;
-let skippedByBothSuppressionSources = 0;
-for (const recipient of uniqueRecipients) {
-	const recipientEmail = String(recipient.email);
-	const normalizedRecipientEmail = normalizeEmail(recipientEmail);
-
-	if (alreadySentEmails.has(normalizedRecipientEmail)) {
-		skippedAlreadySent++;
-		continue;
-	}
-
-	const listManagerSuppressed = listManagerSuppressions.has(normalizedRecipientEmail);
-	const sesSuppressed = sesSuppressions.has(normalizedRecipientEmail);
-	if (listManagerSuppressed || sesSuppressed) {
-		skippedSuppressed++;
-		if (listManagerSuppressed) skippedListManagerSuppressed++;
-		if (sesSuppressed) skippedSesSuppressed++;
-		if (listManagerSuppressed && sesSuppressed) skippedByBothSuppressionSources++;
-		continue;
-	}
-
-	pendingRecipients.push(recipient);
-}
-
-let missingSubjectCount = 0;
-for (const recipient of pendingRecipients) {
-	const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
-	const rawSubject = templateSubject ?? subject ?? rowSubject;
-	if (!rawSubject || !applyPlaceholders(rawSubject, recipient)) {
-		missingSubjectCount++;
-	}
-}
-
-console.info(
-	`Campaign ${campaignId}: ${uniqueRecipients.length} unique recipient(s), ${skippedAlreadySent} already sent, ${skippedSuppressed} suppressed, ${pendingRecipients.length} pending${missingSubjectCount > 0 ? `, ${missingSubjectCount} missing subject(s)` : ""}.`,
-);
-if (skippedSuppressed > 0) {
-	console.info(
-		`Excluded by suppression source: ${skippedListManagerSuppressed} email-list-manager, ${skippedSesSuppressed} SES, ${skippedByBothSuppressionSources} present in both.`,
-	);
-}
-
-if (dryRun) {
-	if (pendingRecipients.length > 0 && missingSubjectCount < pendingRecipients.length) {
-		const sample = pendingRecipients.find(recipient => {
-			const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
-			const rawSubject = templateSubject ?? subject ?? rowSubject;
-			return rawSubject && applyPlaceholders(rawSubject, recipient);
+	const state = await createCampaignState(String(rawOptions.stateDir ?? ".bulk-email/campaigns"), campaignId);
+	const releaseLock = dryRun ? async () => undefined : await acquireCampaignLock(state);
+	try {
+		const accepted = dryRun ? new Set<string>() : await loadAcceptedRecipientDigests(state.acceptedFile, campaignId);
+		if (!dryRun) await validateFailureLog(state.failuresFile, campaignId);
+		const filtered = filterRecipients(deduplicated.recipients, accepted, listSuppressions, sesSuppressions);
+		const messages = await renderCampaign({
+			template: templateModule,
+			recipients: filtered.pending,
+			limits: options.renderLimits,
+			buildUnsubscribeUrl: email => buildUnsubscribeUrl(options, email),
 		});
-		if (sample) {
-			const rowSubject = typeof sample.subject === "string" ? sample.subject : undefined;
-			const rawSubject = templateSubject ?? subject ?? rowSubject;
-			await render(React.createElement(templateModule.default, sample));
-			console.info(`Dry run template validation succeeded (subject: ${applyPlaceholders(rawSubject!, sample)}).`);
-		}
-	}
-	if (missingSubjectCount > 0) {
-		throw new Error(`${missingSubjectCount} pending recipient(s) have no usable subject`);
-	}
-	console.info("Dry run complete; no messages were sent.");
-	process.exit(0);
-}
+		const purpose = templateModule.metadata.audience === "provided-csv"
+			? await resolvePurpose(rawOptions.purpose, Boolean(rawOptions.yes))
+			: undefined;
+		const manifest: CampaignManifest = {
+			campaignId,
+			templateId: templateModule.metadata.id,
+			templateVersion: templateModule.metadata.version,
+			templateSha256: repository.templateSha256,
+			templateCommit: repository.commit,
+			audience: templateModule.metadata.audience,
+			recipientSnapshotSha256: source.snapshotSha256,
+			subjectSha256: createHash("sha256").update(templateModule.metadata.subject).digest("hex"),
+			from: options.from,
+			replyTo: options.replyTo,
+			configurationSet: options.configurationSet,
+			purpose,
+			plannedRecipients: messages.length,
+			suppressedRecipients: filtered.suppressed,
+			createdAt: new Date().toISOString(),
+		};
+		console.info([
+			`Campaign ${campaignId}`,
+			`  Template: ${templateModule.metadata.id} v${templateModule.metadata.version}`,
+			`  Audience: ${templateModule.metadata.audience}`,
+			`  Unique recipients: ${deduplicated.recipients.length}`,
+			`  Already accepted: ${filtered.alreadyAccepted}`,
+			`  Suppressed by email-list-manager: ${filtered.listSuppressed}`,
+			`  Suppressed by SES: ${filtered.sesSuppressed}`,
+			`  Suppressed total: ${filtered.suppressed}`,
+			`  Pending: ${messages.length}`,
+			`  Sender: ${options.fromName ? `${options.fromName} <${options.from}>` : options.from}`,
+			`  Reply-To: ${options.replyTo}`,
+			`  Configuration set: ${options.configurationSet}`,
+			`  Purpose: ${purpose ?? "subscribed updates"}`,
+		].join("\n"));
 
-if (pendingRecipients.length === 0) {
-	console.info("No pending recipients remain after resume and suppression checks.");
-	process.exit(0);
-}
-
-console.info([
-	"Ready to send:",
-	`  Campaign: ${campaignId}`,
-	`  Recipients: ${pendingRecipients.length}`,
-	`  Sender: ${fromName ? `${fromName} <${from}>` : from}`,
-	`  SES configuration set: ${configurationSet}`,
-	"  Dry run: no",
-].join("\n"));
-const confirmed = await confirmCampaignSend({
-	yes: Boolean(yes),
-	prompt: async message => (await inquirer.prompt<{ confirmed: boolean }>({
-		name: "confirmed",
-		type: "confirm",
-		message,
-		default: false,
-	})).confirmed,
-});
-if (!confirmed) {
-	console.info("Campaign cancelled; no messages were sent.");
-	process.exit(0);
-}
-
-const rateLimiter = createPerSecondRateLimiter(maxPerSecond);
-
-console.info(
-	`Sending ${pendingRecipients.length} message(s) to AWS SES in batches of ${batchSize} with concurrency ${concurrency} and max ${maxPerSecond}/sec...`,
-);
-
-let sent = 0;
-const failures: Array<{ email: string; reason: string }> = [];
-for (let i = 0; i < pendingRecipients.length; i += batchSize) {
-	const batch = pendingRecipients.slice(i, i + batchSize);
-	await processWithConcurrency(batch, concurrency, async recipient => {
-		const recipientEmail = String(recipient.email);
-		const normalizedRecipientEmail = normalizeEmail(recipientEmail);
-
-		const rowSubject = typeof recipient.subject === "string" ? recipient.subject : undefined;
-		const rawSubject = templateSubject ?? subject ?? rowSubject;
-		const messageSubject = rawSubject ? applyPlaceholders(rawSubject, recipient) : undefined;
-		const generatedUnsubscribeUrl = buildRecipientUnsubscribeUrl({
-			baseUrl: unsubscribeBaseUrl,
-			secret: unsubscribeSecret,
-			email: recipientEmail,
-			staticUrl: unsubscribeUrl,
-		});
-		const recipientWithComputedUrls = generatedUnsubscribeUrl
-			? { ...recipient, unsubscribeUrl: generatedUnsubscribeUrl }
-			: recipient;
-
-		if (!messageSubject) {
-			failures.push({
-				email: recipientEmail,
-				reason: 'Missing subject. Add `export const subject = "..."` to template, set --subject, or add subject column',
-			});
+		if (dryRun) {
+			console.info("Dry run complete; every pending recipient rendered successfully and no messages were sent.");
 			return;
 		}
-
-		try {
-			const messageId = await sendWithRetry({
-				ses,
-				from,
-				fromName,
-				templateComponent: templateModule.default,
-				recipient: recipientWithComputedUrls,
-				subject: messageSubject,
-				maxAttempts,
-				baseDelayMs,
-				configurationSet,
-				rateLimiter,
-				unsubscribeUrl: generatedUnsubscribeUrl,
-				dev,
-			});
-
-			await checkpointSentMessage(sentLogFile, {
-				email: normalizedRecipientEmail,
-				campaignId,
-				messageId,
-				timestamp: new Date().toISOString(),
-				subscriberSnapshotSha256,
-			});
-			alreadySentEmails.add(normalizedRecipientEmail);
-			sent++;
-		} catch (error) {
-			if (error instanceof SentLogCheckpointError) throw error;
-			const reason = error instanceof Error ? error.message : String(error);
-			failures.push({ email: recipientEmail, reason });
+		await writeOrValidateManifest(state.manifestFile, manifest);
+		if (messages.length === 0) {
+			console.info("No pending recipients remain.");
+			return;
 		}
+		const confirmed = await confirmCampaignSend({
+			yes: Boolean(rawOptions.yes),
+			message: templateModule.metadata.audience === "provided-csv"
+				? "Confirm this message is tied to an existing application, RSVP, attendance, or service relationship, is not promotional, and should be sent now?"
+				: "Send this subscribed-updates campaign now?",
+			prompt: async message => (await inquirer.prompt<{ confirmed: boolean }>({
+				name: "confirmed",
+				type: "confirm",
+				message,
+				default: false,
+			})).confirmed,
+		});
+		if (!confirmed) {
+			console.info("Campaign cancelled; no messages were sent.");
+			return;
+		}
+		await markManifestConfirmed(state.manifestFile);
+		const result = await deliverCampaign({
+			messages,
+			options,
+			ses,
+			campaignId,
+			state,
+			snapshotSha256: source.snapshotSha256,
+			maxPerSecond: effectiveMaxPerSecond,
+			refreshListSuppressions: templateModule.metadata.audience === "subscribers"
+				? async () => { listSuppressions = await fetchListSuppressions(options); return listSuppressions; }
+				: undefined,
+		});
+		console.info(`Done. Sent: ${result.sent}, Newly suppressed: ${result.suppressed}, Failed: ${result.failed}`);
+		if (result.failed > 0) process.exitCode = 1;
+	} finally {
+		await releaseLock();
+	}
+}
+
+async function runTest(rawOptions: OptionValues): Promise<void> {
+	const options = await resolveOptions(rawOptions);
+	const to = z.string().trim().toLowerCase().email().parse(rawOptions.to);
+	const templatePath = path.join(options.templateDir, options.template);
+	const templateModule = await loadTemplateModule(templatePath);
+	const repository = await inspectTemplateRepository(templatePath, { requireClean: true });
+	await verifyTemplateDependencies(repository.packageJsonPath, path.resolve("package.json"));
+	let recipient: RecipientRecord = { email: to, language: "en", name: "" };
+	if (options.file) {
+		const fixture = await readRecipientCsv(options.file, options.maxCsvBytes);
+		if (fixture.length === 0) throw new Error("Test fixture CSV is empty");
+		recipient = { ...fixture[0], email: to };
+	}
+	const [message] = await renderCampaign({
+		template: templateModule,
+		recipients: [recipient],
+		limits: options.renderLimits,
+		buildUnsubscribeUrl: email => buildUnsubscribeUrl(options, email),
 	});
-
-	const nextStart = i + batch.length;
-	if (nextStart < pendingRecipients.length && batchDelayMs > 0) {
-		console.info(
-			`Batch complete (${nextStart}/${pendingRecipients.length}). Waiting ${batchDelayMs}ms before next batch...`,
-		);
-		await sleep(batchDelayMs);
-	}
+	if (!message) throw new Error("Test message did not render");
+	const ses = createSesClient(options);
+	const identity = options.from.slice(options.from.lastIndexOf("@") + 1).toLowerCase();
+	await verifySesPreflight({ client: ses, identity, configurationSet: options.configurationSet });
+	const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
+	if (sesSuppressions.has(to)) throw new Error("The test recipient is on the SES suppression list");
+	const messageId = await sendRendered(message, options, ses, createPerSecondRateLimiter(1));
+	console.info(`SES accepted the exact-path test message (${messageId ?? "no message ID"}).`);
 }
 
-console.info(
-	`Done. Sent: ${sent}, Already-sent skipped: ${skippedAlreadySent}, Suppressed skipped: ${skippedSuppressed}, Failed: ${failures.length}`,
-);
-if (failures.length > 0) {
-	for (const failure of failures) {
-		console.error(`- ${failure.email}: ${failure.reason}`);
+async function resolveOptions(raw: OptionValues): Promise<ResolvedOptions> {
+	const env = process.env;
+	const templateDir = String(raw.templateDir ?? await promptTemplateDirectory());
+	if (!(await fs.pathExists(templateDir))) throw new Error("Please specify an existing template directory");
+	const template = String(raw.template ?? await promptTemplate(templateDir));
+	if (!(await fs.pathExists(path.join(templateDir, template)))) throw new Error("Please specify an existing template file");
+	const from = String(raw.from ?? env.EMAIL_FROM ?? "");
+	const replyTo = String(raw.replyTo ?? env.EMAIL_REPLY_TO ?? "info@hackthehill.com");
+	const region = String(raw.region ?? env.AWS_REGION ?? "");
+	const configurationSet = String(raw.configurationSet ?? env.SES_CONFIGURATION_SET ?? "");
+	for (const [name, value] of [["from", from], ["reply-to", replyTo]] as const) {
+		if (!z.string().email().safeParse(value).success) throw new Error(`Please specify a valid ${name} address`);
 	}
-	process.exitCode = 1;
+	if (!region) throw new Error("Please specify AWS region");
+	if (!configurationSet) throw new Error("Please specify the SES configuration set");
+	const numeric = {
+		maxPerSecond: numberOption(raw.maxPerSecond, env.SES_MAX_PER_SECOND, 14, "max-per-second", 1),
+		concurrency: numberOption(raw.concurrency, env.SEND_CONCURRENCY, 5, "concurrency", 1),
+		batchSize: numberOption(raw.batchSize, env.BATCH_SIZE, 10, "batch-size", 1),
+		batchDelayMs: numberOption(raw.batchDelayMs, env.BATCH_DELAY_MS, 1_200, "batch-delay-ms", 0),
+		maxAttempts: numberOption(raw.maxAttempts, env.MAX_ATTEMPTS, 5, "max-attempts", 1),
+		baseDelayMs: numberOption(raw.baseDelayMs, env.BASE_DELAY_MS, 500, "base-delay-ms", 1),
+		fetchTimeoutMs: numberOption(raw.fetchTimeoutMs, env.FETCH_TIMEOUT_MS, 15_000, "fetch-timeout-ms", 1),
+		maxCsvBytes: numberOption(raw.maxCsvBytes, env.MAX_CSV_BYTES, DEFAULT_MAX_CSV_BYTES, "max-csv-bytes", 1),
+		maxSuppressionPageBytes: numberOption(raw.maxSuppressionPageBytes, env.MAX_SUPPRESSION_PAGE_BYTES, 2 * 1024 * 1024, "max-suppression-page-bytes", 1),
+		maxRecipients: numberOption(raw.maxRecipients, env.MAX_RECIPIENTS, DEFAULT_MAX_RECIPIENTS, "max-recipients", 1),
+		maxHtmlBytes: numberOption(raw.maxHtmlBytes, env.MAX_HTML_BYTES, DEFAULT_MAX_HTML_BYTES, "max-html-bytes", 1),
+		maxTextBytes: numberOption(raw.maxTextBytes, env.MAX_TEXT_BYTES, DEFAULT_MAX_TEXT_BYTES, "max-text-bytes", 1),
+		maxRenderedBytes: numberOption(raw.maxRenderedBytes, env.MAX_RENDERED_BYTES, DEFAULT_MAX_RENDERED_BYTES, "max-rendered-bytes", 1),
+	};
+	const keyring = parseUnsubscribeKeyring(String(raw.unsubscribeTokenKeys ?? env.UNSUBSCRIBE_TOKEN_KEYS ?? "") || undefined);
+	const activeKeyId = String(raw.unsubscribeActiveKeyId ?? env.UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID ?? "") || undefined;
+	if (activeKeyId && !keyring[activeKeyId]) throw new Error("The active unsubscribe key ID is missing from the keyring");
+	return {
+		dev: Boolean(raw.dev ?? env.NODE_ENV === "development"),
+		templateDir,
+		template,
+		file: raw.file ? String(raw.file) : undefined,
+		subscriberExportUrl: String(raw.subscriberExportUrl ?? env.SUBSCRIBER_EXPORT_URL ?? "") || undefined,
+		subscriberExportToken: String(raw.subscriberExportToken ?? env.SUBSCRIBER_EXPORT_TOKEN ?? "") || undefined,
+		from,
+		fromName: String(raw.fromName ?? env.EMAIL_FROM_NAME ?? "") || undefined,
+		replyTo,
+		region,
+		configurationSet,
+		unsubscribeBaseUrl: String(raw.unsubscribeBaseUrl ?? env.UNSUBSCRIBE_BASE_URL ?? "") || undefined,
+		unsubscribeActiveKeyId: activeKeyId,
+		unsubscribeKeyring: keyring,
+		unsubscribeLegacySecret: String(raw.unsubscribeSecret ?? env.UNSUBSCRIBE_SECRET ?? "") || undefined,
+		suppressionCheckUrl: String(raw.suppressionCheckUrl ?? env.SUPPRESSION_CHECK_URL ?? "") || undefined,
+		suppressionCheckToken: String(raw.suppressionCheckToken ?? env.SUPPRESSION_CHECK_TOKEN ?? "") || undefined,
+		...numeric,
+		renderLimits: {
+			maxRecipients: numeric.maxRecipients,
+			maxHtmlBytes: numeric.maxHtmlBytes,
+			maxTextBytes: numeric.maxTextBytes,
+			maxTotalBytes: numeric.maxRenderedBytes,
+		},
+	};
 }
 
-async function processWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
-	if (items.length === 0) {
-		return;
+async function loadCampaignRecipients(audience: "subscribers" | "provided-csv", options: ResolvedOptions): Promise<{
+	recipients: RecipientRecord[];
+	snapshotSha256: string;
+}> {
+	if (audience === "subscribers") {
+		if (options.file) throw new Error("Subscriber templates cannot be paired with --file");
+		if (!options.subscriberExportUrl || !options.subscriberExportToken) {
+			throw new Error("Subscriber templates require the authenticated subscriber export URL and token");
+		}
+		const csv = await fetchCsvSnapshot({
+			url: options.subscriberExportUrl,
+			token: options.subscriberExportToken,
+			timeoutMs: options.fetchTimeoutMs,
+			maxBytes: options.maxCsvBytes,
+		});
+		if (!csv.trim()) throw new Error("Subscriber export endpoint returned an empty response");
+		return { recipients: readRecipientCsvText(csv), snapshotSha256: sha256(csv) };
 	}
+	if (!options.file || !(await fs.pathExists(options.file)) || path.extname(options.file).toLowerCase() !== ".csv") {
+		throw new Error("Provided-CSV templates require --file with an existing CSV");
+	}
+	const bytes = await fs.readFile(options.file);
+	if (bytes.byteLength > options.maxCsvBytes) throw new Error(`Recipient CSV exceeds the configured ${options.maxCsvBytes}-byte limit`);
+	return { recipients: await readRecipientCsv(options.file, options.maxCsvBytes), snapshotSha256: createHash("sha256").update(bytes).digest("hex") };
+}
 
-	const effectiveLimit = Math.max(1, Math.min(limit, items.length));
-	let cursor = 0;
+function filterRecipients(
+	recipients: RecipientRecord[],
+	accepted: ReadonlySet<string>,
+	listSuppressions: ReadonlySet<string>,
+	sesSuppressions: ReadonlySet<string>,
+): { pending: RecipientRecord[]; alreadyAccepted: number; suppressed: number; listSuppressed: number; sesSuppressed: number } {
+	const pending: RecipientRecord[] = [];
+	let alreadyAccepted = 0;
+	let listSuppressed = 0;
+	let sesSuppressed = 0;
+	for (const recipient of recipients) {
+		const normalized = normalizeEmail(recipient.email);
+		if (accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
+		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
+		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		pending.push(recipient);
+	}
+	return { pending, alreadyAccepted, suppressed: listSuppressed + sesSuppressed, listSuppressed, sesSuppressed };
+}
 
-	let fatalError: unknown;
-	const runners = Array.from({ length: effectiveLimit }, async () => {
-		while (cursor < items.length && fatalError === undefined) {
-			const index = cursor;
-			cursor++;
+async function deliverCampaign(input: {
+	messages: RenderedMessage[];
+	options: ResolvedOptions;
+	ses: SESv2Client;
+	campaignId: string;
+	state: Awaited<ReturnType<typeof createCampaignState>>;
+	snapshotSha256: string;
+	maxPerSecond: number;
+	refreshListSuppressions?: () => Promise<Set<string>>;
+}): Promise<{ sent: number; failed: number; suppressed: number }> {
+	const limiter = createPerSecondRateLimiter(input.maxPerSecond);
+	let sent = 0;
+	let failed = 0;
+	let suppressed = 0;
+	for (let offset = 0; offset < input.messages.length; offset += input.options.batchSize) {
+		const latestListSuppressions = input.refreshListSuppressions && offset > 0
+			? await input.refreshListSuppressions()
+			: new Set<string>();
+		const batch = input.messages.slice(offset, offset + input.options.batchSize).filter(message => {
+			if (latestListSuppressions.has(normalizeEmail(message.email))) { suppressed++; return false; }
+			return true;
+		});
+		await processWithConcurrency(batch, input.options.concurrency, async (message, signal) => {
+			const digest = recipientDigest(message.email);
 			try {
-				await worker(items[index]);
+				const messageId = await sendRendered(message, input.options, input.ses, limiter, signal);
+				await checkpointSentMessage(input.state.acceptedFile, {
+					campaignId: input.campaignId,
+					recipientDigest: digest,
+					messageId,
+					timestamp: new Date().toISOString(),
+					recipientSnapshotSha256: input.snapshotSha256,
+				});
+				sent++;
 			} catch (error) {
-				fatalError ??= error;
+				if (error instanceof SentLogCheckpointError || isAmbiguousSesError(error)) {
+					await appendFailureRecord(input.state.failuresFile, {
+						campaignId: input.campaignId,
+						recipientDigest: digest,
+						reasonCode: error instanceof SentLogCheckpointError ? "CheckpointAfterAcceptance" : safeErrorCode(error),
+						outcome: "ambiguous",
+						timestamp: new Date().toISOString(),
+						recipientSnapshotSha256: input.snapshotSha256,
+					}).catch(() => undefined);
+					throw error;
+				}
+				failed++;
+				await appendFailureRecord(input.state.failuresFile, {
+					campaignId: input.campaignId,
+					recipientDigest: digest,
+					reasonCode: safeErrorCode(error),
+					outcome: "failed",
+					timestamp: new Date().toISOString(),
+					recipientSnapshotSha256: input.snapshotSha256,
+				});
 			}
-		}
-	});
-
-	await Promise.all(runners);
-	if (fatalError !== undefined) throw fatalError;
+		});
+		const next = offset + input.options.batchSize;
+		if (next < input.messages.length && input.options.batchDelayMs > 0) await sleep(input.options.batchDelayMs);
+	}
+	return { sent, failed, suppressed };
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, ms));
+async function sendRendered(message: RenderedMessage, options: ResolvedOptions, ses: SESv2Client, rateLimiter: ReturnType<typeof createPerSecondRateLimiter>, abortSignal?: AbortSignal): Promise<string | undefined> {
+	return sendWithRetry({
+		ses,
+		from: options.from,
+		fromName: options.fromName,
+		replyTo: options.replyTo,
+		to: message.email,
+		subject: message.subject,
+		html: message.html,
+		text: message.text,
+		maxAttempts: options.maxAttempts,
+		baseDelayMs: options.baseDelayMs,
+		configurationSet: options.configurationSet,
+		rateLimiter,
+		unsubscribeUrl: message.unsubscribeUrl,
+		dev: options.dev,
+		abortSignal,
+	});
+}
+
+function buildUnsubscribeUrl(options: ResolvedOptions, email: string): string | undefined {
+	return buildRecipientUnsubscribeUrl({
+		baseUrl: options.unsubscribeBaseUrl,
+		activeKeyId: options.unsubscribeActiveKeyId,
+		keyring: options.unsubscribeKeyring,
+		legacySecret: options.unsubscribeLegacySecret,
+		email,
+	});
+}
+
+async function fetchListSuppressions(options: ResolvedOptions): Promise<Set<string>> {
+	if (!options.suppressionCheckUrl || !options.suppressionCheckToken) {
+		throw new Error("Subscriber templates require the authenticated suppression endpoint and token");
+	}
+	return fetchSuppressedEmailSet({
+		endpointUrl: options.suppressionCheckUrl,
+		bearerToken: options.suppressionCheckToken,
+		timeoutMs: options.fetchTimeoutMs,
+		maxPageBytes: options.maxSuppressionPageBytes,
+	});
+}
+
+function createSesClient(options: ResolvedOptions): SESv2Client {
+	return new SESv2Client({
+		region: options.region,
+		maxAttempts: 1,
+		requestHandler: new NodeHttpHandler({
+			connectionTimeout: options.fetchTimeoutMs,
+			requestTimeout: options.fetchTimeoutMs,
+		}),
+	});
+}
+
+async function resolvePurpose(value: unknown, yes: boolean): Promise<string> {
+	let purpose = typeof value === "string" ? value.trim() : "";
+	if (!purpose && process.stdin.isTTY && !yes) {
+		purpose = (await inquirer.prompt<{ purpose: string }>({
+			name: "purpose",
+			type: "input",
+			message: "Describe the existing event/service relationship for this non-promotional campaign",
+		})).purpose.trim();
+	}
+	if (purpose.length < 10 || purpose.length > 500) {
+		throw new Error("Provided-CSV templates require a 10-500 character non-promotional purpose statement");
+	}
+	return purpose;
+}
+
+async function promptTemplateDirectory(): Promise<string> {
+	return (await inquirer.prompt<{ value: string }>({
+		name: "value", type: "input", message: "Template directory", default: "templates",
+	})).value;
+}
+
+async function promptTemplate(directory: string): Promise<string> {
+	const choices = (await fs.readdir(directory)).filter(name => /\.(tsx|ts|jsx|js)$/i.test(name));
+	if (choices.length === 0) throw new Error("No React Email templates were found");
+	return (await inquirer.prompt<{ value: string }>({
+		name: "value", type: "list", message: "Template", choices,
+	})).value;
+}
+
+function numberOption(cliValue: unknown, envValue: string | undefined, fallback: number, name: string, minimum: number): number {
+	const value = cliValue === undefined ? Number(envValue ?? fallback) : Number(cliValue);
+	if (!Number.isFinite(value) || !Number.isInteger(value) || value < minimum) throw new Error(`${name} must be an integer of at least ${minimum}`);
+	return value;
+}
+
+function safeErrorCode(error: unknown): string {
+	if (!error || typeof error !== "object") return "UnknownError";
+	const value = error as { name?: unknown; $metadata?: { httpStatusCode?: unknown } };
+	if (typeof value.name === "string" && /^[A-Za-z0-9_.-]{1,100}$/.test(value.name)) return value.name;
+	const status = value.$metadata?.httpStatusCode;
+	return typeof status === "number" ? `HTTP_${status}` : "UnknownError";
+}
+
+function sha256(value: string): string {
+	return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function sleep(milliseconds: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, milliseconds));
 }

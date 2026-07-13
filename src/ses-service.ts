@@ -11,7 +11,7 @@ export async function verifySesPreflight(input: {
 	client: SESv2Client;
 	identity: string;
 	configurationSet: string;
-}): Promise<void> {
+}): Promise<{ maxSendRate?: number }> {
 	const [account, identity, configurationSet] = await Promise.all([
 		input.client.send(new GetAccountCommand({})),
 		input.client.send(new GetEmailIdentityCommand({ EmailIdentity: input.identity })),
@@ -27,6 +27,7 @@ export async function verifySesPreflight(input: {
 	if (configurationSet.SendingOptions?.SendingEnabled === false) {
 		throw new Error(`SES configuration set ${input.configurationSet} has sending disabled`);
 	}
+	return { maxSendRate: account.SendQuota?.MaxSendRate };
 }
 
 export async function fetchSesSuppressedEmailSet(client: SESv2Client): Promise<Set<string>> {

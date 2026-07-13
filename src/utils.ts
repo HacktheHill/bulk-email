@@ -37,23 +37,55 @@ export function isValidCampaignId(campaignId: string): boolean {
 
 export function buildRecipientUnsubscribeUrl(input: {
 	baseUrl?: string;
-	secret?: string;
+	activeKeyId?: string;
+	keyring?: Record<string, string>;
+	legacySecret?: string;
 	email: string;
-	staticUrl?: string;
 }): string | undefined {
-	const { baseUrl, secret, email, staticUrl } = input;
+	const { baseUrl, activeKeyId, keyring, legacySecret, email } = input;
 
-	if (baseUrl && secret) {
+	if (baseUrl && activeKeyId && keyring?.[activeKeyId]) {
 		const payload = JSON.stringify({ email: normalizeEmail(email), iat: Date.now() });
 		const payloadB64 = base64UrlEncode(payload);
-		const signatureB64 = base64UrlEncode(createHmac("sha256", secret).update(payloadB64).digest());
-		const token = `${payloadB64}.${signatureB64}`;
+		const signedValue = `v1.${activeKeyId}.${payloadB64}`;
+		const signatureB64 = base64UrlEncode(createHmac("sha256", keyring[activeKeyId]).update(signedValue).digest());
+		const token = `${signedValue}.${signatureB64}`;
 		const url = new URL(baseUrl);
 		url.searchParams.set("token", token);
 		return url.toString();
 	}
 
-	return staticUrl;
+	if (baseUrl && legacySecret) {
+		const payload = JSON.stringify({ email: normalizeEmail(email), iat: Date.now() });
+		const payloadB64 = base64UrlEncode(payload);
+		const signatureB64 = base64UrlEncode(createHmac("sha256", legacySecret).update(payloadB64).digest());
+		const url = new URL(baseUrl);
+		url.searchParams.set("token", `${payloadB64}.${signatureB64}`);
+		return url.toString();
+	}
+
+	return undefined;
+}
+
+export function parseUnsubscribeKeyring(value: string | undefined): Record<string, string> {
+	if (!value) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error("UNSUBSCRIBE_TOKEN_KEYS must be valid JSON");
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error("UNSUBSCRIBE_TOKEN_KEYS must be a JSON object");
+	}
+	const result: Record<string, string> = {};
+	for (const [keyId, secret] of Object.entries(parsed)) {
+		if (!/^[A-Za-z0-9_-]{1,32}$/.test(keyId) || typeof secret !== "string" || secret.length < 32) {
+			throw new Error("UNSUBSCRIBE_TOKEN_KEYS contains an invalid key");
+		}
+		result[keyId] = secret;
+	}
+	return result;
 }
 
 export function base64UrlEncode(input: string | Buffer): string {

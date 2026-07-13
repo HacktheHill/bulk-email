@@ -1,7 +1,4 @@
 import { SendEmailCommand, type SESv2Client } from "@aws-sdk/client-sesv2";
-import { render } from "@react-email/render";
-import { convert } from "html-to-text";
-import * as React from "react";
 import { computeBackoffDelay } from "./utils.js";
 
 export type TemplateProps = Record<string, unknown>;
@@ -14,28 +11,24 @@ export type SendWithRetryInput = {
 	ses: Pick<SESv2Client, "send">;
 	from: string;
 	fromName?: string;
-	templateComponent: (props: TemplateProps) => React.ReactElement;
-	recipient: TemplateProps;
+	replyTo?: string;
+	to: string;
 	subject: string;
+	html: string;
+	text: string;
 	maxAttempts: number;
 	baseDelayMs: number;
 	configurationSet?: string;
 	rateLimiter: RateLimiter;
 	unsubscribeUrl?: string;
 	dev?: boolean;
+	abortSignal?: AbortSignal;
 	sleep?: (milliseconds: number) => Promise<void>;
 };
 
 export async function sendWithRetry(input: SendWithRetryInput): Promise<string | undefined> {
-	const toAddress = String(input.recipient.email);
 	const fromAddress = input.fromName ? `${input.fromName} <${input.from}>` : input.from;
-	const renderedHtml = await render(React.createElement(input.templateComponent, input.recipient));
-	const html = applyPlaceholders(renderedHtml, input.recipient);
-	const text = convert(html, {
-		wordwrap: 120,
-		selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
-	});
-	if (!text.trim()) {
+	if (!input.html.trim() || !input.text.trim()) {
 		throw new Error("Template rendered an empty message body; refusing to send");
 	}
 	const sleep = input.sleep ?? delay;
@@ -51,20 +44,21 @@ export async function sendWithRetry(input: SendWithRetryInput): Promise<string |
 				: undefined;
 			const result = await input.ses.send(new SendEmailCommand({
 				FromEmailAddress: fromAddress,
-				Destination: { ToAddresses: [toAddress] },
+				Destination: { ToAddresses: [input.to] },
+				ReplyToAddresses: input.replyTo ? [input.replyTo] : undefined,
 				Content: {
 					Simple: {
 						Subject: { Data: input.subject, Charset: "UTF-8" },
 						Body: {
-							Html: { Data: html, Charset: "UTF-8" },
-							Text: { Data: text, Charset: "UTF-8" },
+							Html: { Data: input.html, Charset: "UTF-8" },
+							Text: { Data: input.text, Charset: "UTF-8" },
 						},
 						Headers: headers,
 					},
 				},
 				ConfigurationSetName: input.configurationSet,
-			}));
-			if (input.dev) console.info(`Sent to ${toAddress}: ${result.MessageId ?? "<no-id>"}`);
+			}), { abortSignal: input.abortSignal });
+			if (input.dev) console.info(`SES accepted a message: ${result.MessageId ?? "<no-id>"}`);
 			return result.MessageId;
 		} catch (error) {
 			if (!isRetryableSesError(error) || attempt === input.maxAttempts) throw error;
@@ -102,16 +96,25 @@ export function isRetryableSesError(error: unknown): boolean {
 		"TooManyRequestsException",
 		"ServiceUnavailableException",
 		"InternalServiceError",
-		"RequestTimeout",
 	]).has(awsError.name ?? "");
+}
+
+export function isAmbiguousSesError(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const networkError = error as { name?: unknown; code?: unknown };
+	return new Set(["AbortError", "TimeoutError", "RequestTimeout"]).has(String(networkError.name ?? ""))
+		|| new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]).has(String(networkError.code ?? ""));
 }
 
 export function applyPlaceholders(input: string, values: TemplateProps): string {
 	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
 		const value = values[key];
+		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
+			throw new Error(`Template contains an unresolved placeholder: ${key}`);
+		}
 		return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
 			? String(value)
-			: "";
+			: (() => { throw new Error(`Template placeholder ${key} is not a scalar value`); })();
 	});
 }
 

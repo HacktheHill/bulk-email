@@ -5,4 +5,6 @@ dist/
 templates/
 .sent-emails.jsonl
 .sent-emails-*.jsonl
+.bulk-email/
+.eslintcache
 *.log
