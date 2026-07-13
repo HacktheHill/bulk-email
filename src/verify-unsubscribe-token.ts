@@ -6,7 +6,7 @@ import { program } from "commander";
 let { token, secret, url } = program
 	.option("--token <token>", "Unsubscribe token in <payload>.<signature> format")
 	.option("--secret <secret>", "HMAC secret used to sign unsubscribe tokens")
-	.option("--url <url>", "Full unsubscribe URL containing ?t=...")
+	.option("--url <url>", "Full unsubscribe URL containing ?token=...")
 	.parse()
 	.opts();
 
@@ -22,7 +22,7 @@ if (!secret) {
 
 if (url && !token) {
 	const parsed = new URL(url);
-	token = parsed.searchParams.get("t") ?? undefined;
+	token = parsed.searchParams.get("token") ?? undefined;
 }
 
 if (!token) {

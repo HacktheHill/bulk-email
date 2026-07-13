@@ -4,4 +4,5 @@ dist/
 .env
 templates/
 .sent-emails.jsonl
+.sent-emails-*.jsonl
 *.log

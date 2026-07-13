@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { SendEmailCommand, type SESv2Client } from "@aws-sdk/client-sesv2";
+import * as React from "react";
+import { sendWithRetry } from "../src/mailer.js";
+
+test("retries transient SES errors and includes one-click unsubscribe headers", async () => {
+	const commands: SendEmailCommand[] = [];
+	let attempts = 0;
+	const ses = {
+		send: async (command: SendEmailCommand) => {
+			commands.push(command);
+			attempts++;
+			if (attempts === 1) throw Object.assign(new Error("throttled"), { name: "ThrottlingException" });
+			return { MessageId: "message-id" };
+		},
+	} as unknown as Pick<SESv2Client, "send">;
+	const sleeps: number[] = [];
+
+	const messageId = await sendWithRetry({
+		ses,
+		from: "info@hackthehill.com",
+		templateComponent: ({ email }) => React.createElement("p", null, String(email)),
+		recipient: { email: "member@example.com" },
+		subject: "Update",
+		maxAttempts: 3,
+		baseDelayMs: 1,
+		configurationSet: "my-first-configuration-set",
+		rateLimiter: { acquire: async () => undefined },
+		unsubscribeUrl: "https://emails.hackthehill.com/unsubscribe?token=signed",
+		sleep: async milliseconds => { sleeps.push(milliseconds); },
+	});
+
+	assert.equal(messageId, "message-id");
+	assert.equal(attempts, 2);
+	assert.equal(sleeps.length, 1);
+	const headers = commands[1].input.Content?.Simple?.Headers;
+	assert.deepEqual(headers, [
+		{ Name: "List-Unsubscribe", Value: "<https://emails.hackthehill.com/unsubscribe?token=signed>" },
+		{ Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
+	]);
+});
