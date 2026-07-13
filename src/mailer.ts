@@ -35,6 +35,9 @@ export async function sendWithRetry(input: SendWithRetryInput): Promise<string |
 		wordwrap: 120,
 		selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
 	});
+	if (!text.trim()) {
+		throw new Error("Template rendered an empty message body; refusing to send");
+	}
 	const sleep = input.sleep ?? delay;
 
 	for (let attempt = 1; attempt <= input.maxAttempts; attempt++) {
