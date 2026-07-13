@@ -2,4 +2,7 @@ node_modules/
 dist/
 *.csv
 .env
-src/test_data/
+templates/
+.sent-emails.jsonl
+.sent-emails-*.jsonl
+*.log
