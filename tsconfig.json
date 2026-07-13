@@ -8,6 +8,6 @@
 		"outDir": "dist",
 		"jsx": "react"
 	},
-	"include": ["src/**/*", "src/test_data/reactToHtml.tsx"],
+	"include": ["src/**/*", "test/**/*", "src/test_data/reactToHtml.tsx"],
 	"exclude": ["node_modules", "**/node_modules/*"]
 }

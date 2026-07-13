@@ -9,12 +9,14 @@ export const recipientSchema = z
 	.object({
 		email: z.string().trim().toLowerCase().email(),
 		name: z.string().optional().default(""),
-		language: z.string().optional().default("en"),
+		language: z.enum(["en", "fr"]).optional().default("en"),
 		subject: z.string().optional(),
 	})
 	.passthrough();
 
-export async function readRecipientCsv(file: string): Promise<RecipientRecord[]> {
+export async function readRecipientCsv(file: string, maxBytes = 25 * 1024 * 1024): Promise<RecipientRecord[]> {
+	const fileSize = (await fs.stat(file)).size;
+	if (fileSize > maxBytes) throw new Error(`Recipient CSV exceeds the configured ${maxBytes}-byte limit`);
 	const recipients: RecipientRecord[] = [];
 	const csvParser = fs.createReadStream(file).pipe(
 		parse({
@@ -31,7 +33,7 @@ export async function readRecipientCsv(file: string): Promise<RecipientRecord[]>
 		const schema = recipientSchema.safeParse(row);
 
 		if (!schema.success) {
-			throw new Error(`Failed to validate CSV row ${rowNumber}: ${JSON.stringify(row)}`);
+			throw new Error(`Failed to validate CSV row ${rowNumber}: ${schema.error.issues.map(issue => issue.path.join(".") || issue.message).join(", ")}`);
 		}
 
 		recipients.push(schema.data as RecipientRecord);
@@ -54,7 +56,7 @@ function validateRecipientRows(rows: unknown[]): RecipientRecord[] {
 	return rows.map((row, index) => {
 		const schema = recipientSchema.safeParse(row);
 		if (!schema.success) {
-			throw new Error(`Failed to validate CSV row ${index + 2}: ${JSON.stringify(row)}`);
+			throw new Error(`Failed to validate CSV row ${index + 2}: ${schema.error.issues.map(issue => issue.path.join(".") || issue.message).join(", ")}`);
 		}
 		return schema.data as RecipientRecord;
 	});

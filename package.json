@@ -3,6 +3,7 @@
 	"name": "bulk-email",
 	"description": "Send bulk emails with React Email templates through AWS SES",
 	"version": "2.1.0",
+	"private": true,
 	"main": "dist/app.js",
 	"module": "dist/app.js",
 	"repository": {
@@ -23,32 +24,40 @@
 	],
 	"type": "module",
 	"scripts": {
-		"start": "npx tsx src/app.ts",
+		"start": "tsx src/app.ts",
 		"build": "tsc",
 		"test": "tsx --test test/*.test.ts test/*.test.tsx",
-		"verify-unsub-token": "npx tsx src/verify-unsubscribe-token.ts"
+		"typecheck": "tsc --noEmit",
+		"lint": "eslint src test",
+		"audit:prod": "npm audit --omit=dev --audit-level=high",
+		"verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run audit:prod && npm audit --audit-level=high",
+		"verify-unsub-token": "tsx src/verify-unsubscribe-token.ts"
 	},
 	"bin": "dist/app.js",
 	"dependencies": {
-		"@aws-sdk/client-sesv2": "^3.1085.0",
-		"@react-email/components": "^1.0.12",
-		"@react-email/render": "^2.1.0",
-		"@types/fs-extra": "^9.0.13",
+		"@aws-sdk/client-sesv2": "3.1085.0",
+		"@react-email/components": "1.0.12",
+		"@react-email/render": "2.1.0",
+		"@smithy/node-http-handler": "4.4.3",
 		"commander": "^9.4.1",
 		"csv-parse": "^7.0.1",
 		"dotenv": "^16.0.3",
 		"fs-extra": "^11.1.0",
 		"html-to-text": "^9.0.5",
 		"inquirer": "^12.11.1",
-		"react": "^18.3.1",
-		"react-dom": "^18.3.1",
+		"react": "18.3.1",
+		"react-dom": "18.3.1",
 		"zod": "^3.20.2"
 	},
 	"devDependencies": {
+		"@eslint/js": "9.39.2",
+		"@types/fs-extra": "9.0.13",
 		"@types/html-to-text": "^9.0.4",
-		"@types/react": "^18.3.31",
+		"@types/react": "18.3.31",
 		"esbuild": "^0.28.1",
+		"eslint": "9.39.2",
 		"tsx": "^4.23.0",
-		"typescript": "^5.9.3"
+		"typescript": "^5.9.3",
+		"typescript-eslint": "8.53.1"
 	}
 }

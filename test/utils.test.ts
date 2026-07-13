@@ -6,6 +6,7 @@ import {
 	deduplicateRecipients,
 	isValidCampaignId,
 	normalizeEmail,
+	parseUnsubscribeKeyring,
 } from "../src/utils.js";
 
 test("normalizes and deduplicates recipient addresses", () => {
@@ -29,15 +30,24 @@ test("validates campaign IDs", () => {
 test("builds a signed unsubscribe URL", () => {
 	const url = buildRecipientUnsubscribeUrl({
 		baseUrl: "https://emails.example.test/unsubscribe",
-		secret: "test-secret",
+		activeKeyId: "test-2026",
+		keyring: { "test-2026": "test-versioned-unsubscribe-secret-2026" },
 		email: " Alice@Example.com ",
 	});
 
 	assert.ok(url);
 	const parsed = new URL(url);
 	assert.equal(parsed.pathname, "/unsubscribe");
-	assert.match(parsed.searchParams.get("token") ?? "", /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+	assert.match(parsed.searchParams.get("token") ?? "", /^v1\.test-2026\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 	assert.equal(parsed.searchParams.get("t"), null);
+});
+
+test("parses and validates the unsubscribe keyring", () => {
+	assert.deepEqual(
+		parseUnsubscribeKeyring('{"key-1":"01234567890123456789012345678901"}'),
+		{ "key-1": "01234567890123456789012345678901" },
+	);
+	assert.throws(() => parseUnsubscribeKeyring('{"bad key":"short"}'), /invalid key/);
 });
 
 test("computes bounded retry backoff with deterministic jitter", () => {

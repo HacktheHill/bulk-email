@@ -25,7 +25,11 @@ test("rejects rows without a valid email", async () => {
 	await writeFile(file, "email\nnot-an-email\n", "utf8");
 
 	try {
-		await assert.rejects(readRecipientCsv(file), /Failed to validate CSV row 2/);
+		await assert.rejects(readRecipientCsv(file), error => {
+			assert.match(String(error), /Failed to validate CSV row 2/);
+			assert.doesNotMatch(String(error), /not-an-email/);
+			return true;
+		});
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

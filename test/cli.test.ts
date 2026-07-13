@@ -5,14 +5,17 @@ import test from "node:test";
 
 const execFileAsync = promisify(execFile);
 
-test("CLI exposes --yes and exits successfully for help", async () => {
-	const result = await execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "--help"]);
+test("CLI exposes the unified send and exact-path test commands", async () => {
+	const result = await execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "send", "--help"]);
 	assert.match(result.stdout, /--yes/);
+	const root = await execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "--help"]);
+	assert.match(root.stdout, /send \[options\]/);
+	assert.match(root.stdout, /test \[options\]/);
 });
 
 test("CLI returns a nonzero exit for invalid campaign configuration", async () => {
 	await assert.rejects(
-		execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "--campaign-id", "../unsafe"]),
+		execFileAsync(process.execPath, ["--import", "tsx", "src/app.ts", "send", "--campaign-id", "../unsafe"]),
 		(error: unknown) => typeof error === "object" && error !== null && "code" in error && error.code !== 0,
 	);
 });
