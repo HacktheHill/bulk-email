@@ -48,11 +48,11 @@ The required column is `email`. Optional columns include `name`, `language`, and
 When `UNSUBSCRIBE_BASE_URL` and `UNSUBSCRIBE_SECRET` are set, the sender generates a per-recipient signed URL and sends both RFC 8058 headers:
 
 ```text
-List-Unsubscribe: <https://emails.hackthehill.com/unsubscribe?t=...>
+List-Unsubscribe: <https://emails.hackthehill.com/unsubscribe?token=...>
 List-Unsubscribe-Post: List-Unsubscribe=One-Click
 ```
 
-The Worker accepts both the current `token` parameter and the legacy `t` parameter. Templates should also display `unsubscribeUrl` in the HTML and text body.
+The Worker accepts the canonical `token` parameter. Templates should also display `unsubscribeUrl` in the HTML and text body.
 
 The sender fetches both the email-list-manager suppression list and the SES account-level bounce/complaint suppression list before a campaign, merges them, and skips all matches locally. Logs report counts by source without printing excluded addresses.
 

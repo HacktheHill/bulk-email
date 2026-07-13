@@ -36,7 +36,8 @@ test("builds a signed unsubscribe URL", () => {
 	assert.ok(url);
 	const parsed = new URL(url);
 	assert.equal(parsed.pathname, "/unsubscribe");
-	assert.match(parsed.searchParams.get("t") ?? "", /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+	assert.match(parsed.searchParams.get("token") ?? "", /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+	assert.equal(parsed.searchParams.get("t"), null);
 });
 
 test("computes bounded retry backoff with deterministic jitter", () => {
