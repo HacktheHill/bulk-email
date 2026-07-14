@@ -85,3 +85,54 @@ npm run verify
 ```
 
 The package is private and is not published to npm.
+
+## GitHub Actions Scheduling
+
+`.github/workflows/send-campaign.yml` is reusable through `workflow_call` and can also be started manually with `workflow_dispatch`. It always runs the full dry-run preflight. The irreversible send is opt-in through the `execute_send` input and runs in the protected `production` environment.
+
+Configure these repository or environment secrets before using it:
+
+```text
+BULK_EMAIL_REPO_TOKEN (optional when running from bulk-email itself)
+TEMPLATES_REPO_TOKEN
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_SESSION_TOKEN (optional)
+AWS_REGION
+EMAIL_FROM
+EMAIL_FROM_NAME
+EMAIL_REPLY_TO
+SES_CONFIGURATION_SET
+SUBSCRIBER_EXPORT_URL
+SUBSCRIBER_EXPORT_TOKEN
+SUPPRESSION_CHECK_URL
+SUPPRESSION_CHECK_TOKEN
+UNSUBSCRIBE_BASE_URL
+UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID
+UNSUBSCRIBE_TOKEN_KEYS
+```
+
+Set `TEMPLATES_REPO_TOKEN` to a read-only token that can check out `HacktheHill/react-email-templates`. Configure required reviewers on the GitHub `production` environment so a scheduled run cannot send without an approval.
+
+A scheduling workflow can call this reusable workflow after the campaign date and time are approved:
+
+```yaml
+name: Schedule Save-the-Date
+
+on:
+  schedule:
+    - cron: "0 17 * * 2" # 1:00 PM Eastern during daylight time; use 18 UTC during standard time
+
+jobs:
+  send:
+    uses: HacktheHill/bulk-email/.github/workflows/send-campaign.yml@main
+    with:
+      bulk_email_ref: main
+      campaign_id: hth-save-the-date-2026
+      template: save-the-date.tsx
+      template_ref: main
+      execute_send: true
+    secrets: inherit
+```
+
+GitHub Actions cron uses UTC and may start late under platform load. Use a fixed UTC schedule based on the approved date and Eastern daylight/standard-time conversion, or schedule a separate workflow for a single date. The reusable workflow is deliberately not scheduled by this repository yet.

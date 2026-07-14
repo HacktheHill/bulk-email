@@ -1,0 +1,208 @@
+name: Send Email Campaign
+
+on:
+    workflow_call:
+        inputs:
+            bulk_email_ref:
+                description: "Branch, tag, or commit in bulk-email"
+                required: false
+                default: main
+                type: string
+            campaign_id:
+                description: "Stable campaign ID used for checkpointing and resume protection"
+                required: true
+                type: string
+            template:
+                description: "Template filename under emails/hackthehill"
+                required: false
+                default: save-the-date.tsx
+                type: string
+            template_ref:
+                description: "Branch, tag, or commit in react-email-templates"
+                required: false
+                default: main
+                type: string
+            execute_send:
+                description: "Run the irreversible SES send after preflight"
+                required: false
+                default: false
+                type: boolean
+        secrets:
+            BULK_EMAIL_REPO_TOKEN:
+                required: false
+            TEMPLATES_REPO_TOKEN:
+                required: true
+            AWS_ACCESS_KEY_ID:
+                required: true
+            AWS_SECRET_ACCESS_KEY:
+                required: true
+            AWS_SESSION_TOKEN:
+                required: false
+            AWS_REGION:
+                required: true
+            EMAIL_FROM:
+                required: true
+            EMAIL_FROM_NAME:
+                required: true
+            EMAIL_REPLY_TO:
+                required: true
+            SES_CONFIGURATION_SET:
+                required: true
+            SUBSCRIBER_EXPORT_URL:
+                required: true
+            SUBSCRIBER_EXPORT_TOKEN:
+                required: true
+            SUPPRESSION_CHECK_URL:
+                required: true
+            SUPPRESSION_CHECK_TOKEN:
+                required: true
+            UNSUBSCRIBE_BASE_URL:
+                required: true
+            UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID:
+                required: true
+            UNSUBSCRIBE_TOKEN_KEYS:
+                required: true
+    workflow_dispatch:
+        inputs:
+            bulk_email_ref:
+                description: "Branch, tag, or commit in bulk-email"
+                required: true
+                default: main
+                type: string
+            campaign_id:
+                description: "Stable campaign ID used for checkpointing and resume protection"
+                required: true
+                type: string
+            template:
+                description: "Template filename under emails/hackthehill"
+                required: true
+                default: save-the-date.tsx
+                type: string
+            template_ref:
+                description: "Branch, tag, or commit in react-email-templates"
+                required: true
+                default: main
+                type: string
+            execute_send:
+                description: "Run the irreversible SES send after preflight"
+                required: true
+                default: false
+                type: boolean
+
+permissions:
+    contents: read
+
+concurrency:
+    group: bulk-email-${{ inputs.campaign_id }}
+    cancel-in-progress: false
+
+env:
+    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+    AWS_REGION: ${{ secrets.AWS_REGION }}
+    EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+    EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
+    EMAIL_REPLY_TO: ${{ secrets.EMAIL_REPLY_TO }}
+    SES_CONFIGURATION_SET: ${{ secrets.SES_CONFIGURATION_SET }}
+    SUBSCRIBER_EXPORT_URL: ${{ secrets.SUBSCRIBER_EXPORT_URL }}
+    SUBSCRIBER_EXPORT_TOKEN: ${{ secrets.SUBSCRIBER_EXPORT_TOKEN }}
+    SUPPRESSION_CHECK_URL: ${{ secrets.SUPPRESSION_CHECK_URL }}
+    SUPPRESSION_CHECK_TOKEN: ${{ secrets.SUPPRESSION_CHECK_TOKEN }}
+    UNSUBSCRIBE_BASE_URL: ${{ secrets.UNSUBSCRIBE_BASE_URL }}
+    UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID: ${{ secrets.UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID }}
+    UNSUBSCRIBE_TOKEN_KEYS: ${{ secrets.UNSUBSCRIBE_TOKEN_KEYS }}
+
+jobs:
+    preflight:
+        name: Preflight campaign
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - name: Check out bulk-email
+              uses: actions/checkout@34e11481c0b11c390a56381ad16ebd13914f8d5 # v4
+              with:
+                  repository: HacktheHill/bulk-email
+                  ref: ${{ inputs.bulk_email_ref }}
+                  token: ${{ secrets.BULK_EMAIL_REPO_TOKEN || github.token }}
+                  path: bulk-email
+
+            - name: Check out email templates
+              uses: actions/checkout@34e11481c0b11c390a56381ad16ebd13914f8d5 # v4
+              with:
+                  repository: HacktheHill/react-email-templates
+                  ref: ${{ inputs.template_ref }}
+                  token: ${{ secrets.TEMPLATES_REPO_TOKEN }}
+                  path: react-email-templates
+
+            - name: Set up Node.js
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: "22.x"
+                  cache: npm
+                  cache-dependency-path: bulk-email/package-lock.json
+
+            - name: Install bulk-email dependencies
+              working-directory: bulk-email
+              run: npm ci
+
+            - name: Verify bulk-email
+              working-directory: bulk-email
+              run: npm run verify
+
+            - name: Verify email templates
+              working-directory: react-email-templates
+              run: npm ci && npm run verify
+
+            - name: Run production-shaped dry run
+              working-directory: bulk-email
+              run: |
+                  npm run start -- send \
+                    --campaign-id "${{ inputs.campaign_id }}" \
+                    --template-dir ../react-email-templates/emails/hackthehill \
+                    --template "${{ inputs.template }}" \
+                    --dry-run
+
+    send:
+        name: Send campaign through SES
+        if: ${{ inputs.execute_send }}
+        needs: preflight
+        runs-on: ubuntu-latest
+        environment: production
+        timeout-minutes: 60
+        steps:
+            - name: Check out bulk-email
+              uses: actions/checkout@34e11481c0b11c390a56381ad16ebd13914f8d5 # v4
+              with:
+                  repository: HacktheHill/bulk-email
+                  ref: ${{ inputs.bulk_email_ref }}
+                  token: ${{ secrets.BULK_EMAIL_REPO_TOKEN || github.token }}
+                  path: bulk-email
+
+            - name: Check out email templates
+              uses: actions/checkout@34e11481c0b11c390a56381ad16ebd13914f8d5 # v4
+              with:
+                  repository: HacktheHill/react-email-templates
+                  ref: ${{ inputs.template_ref }}
+                  token: ${{ secrets.TEMPLATES_REPO_TOKEN }}
+                  path: react-email-templates
+
+            - name: Set up Node.js
+              uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+              with:
+                  node-version: "22.x"
+                  cache: npm
+                  cache-dependency-path: bulk-email/package-lock.json
+
+            - name: Install bulk-email dependencies
+              working-directory: bulk-email
+              run: npm ci
+
+            - name: Send campaign
+              working-directory: bulk-email
+              run: |
+                  npm run start -- send \
+                    --campaign-id "${{ inputs.campaign_id }}" \
+                    --template-dir ../react-email-templates/emails/hackthehill \
+                    --template "${{ inputs.template }}" \
+                    --yes

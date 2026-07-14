@@ -1,0 +1,38 @@
+name: Schedule Save-the-Date
+
+on:
+  schedule:
+    # 10:00 AM EDT on July 14, 2026. GitHub Actions schedules use UTC.
+    - cron: "0 14 14 7 *"
+
+permissions:
+  contents: read
+
+jobs:
+  date-guard:
+    name: Confirm scheduled date
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.date.outputs.run }}
+    steps:
+      - id: date
+        env:
+          EXPECTED_DATE: "2026-07-14"
+        run: |
+          if [ "$(date -u +%Y-%m-%d)" = "$EXPECTED_DATE" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  send:
+    needs: date-guard
+    if: ${{ needs.date-guard.outputs.run == 'true' }}
+    uses: ./.github/workflows/send-campaign.yml
+    with:
+      bulk_email_ref: main
+      campaign_id: hth-save-the-date-2026
+      template: save-the-date.tsx
+      template_ref: main
+      execute_send: true
+    secrets: inherit
