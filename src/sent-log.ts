@@ -78,7 +78,7 @@ export async function acquireCampaignLock(state: CampaignState): Promise<() => P
 		handle = await open(state.lockFile, "wx", 0o600);
 	} catch (error) {
 		if (isNodeError(error) && error.code === "EEXIST") {
-			throw new Error(`Campaign is already locked: ${state.directory}`);
+			throw new Error(`Campaign is already locked: ${state.directory}`, { cause: error });
 		}
 		throw error;
 	}
