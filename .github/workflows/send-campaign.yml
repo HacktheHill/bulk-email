@@ -198,6 +198,10 @@ jobs:
               working-directory: bulk-email
               run: npm ci
 
+            - name: Install email template dependencies
+              working-directory: react-email-templates
+              run: npm ci
+
             - name: Send campaign
               working-directory: bulk-email
               run: |
