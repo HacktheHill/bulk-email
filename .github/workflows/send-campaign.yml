@@ -27,6 +27,11 @@ on:
                 required: false
                 default: false
                 type: boolean
+            test_email_to:
+                description: "Send one test email instead of the campaign"
+                required: false
+                default: ""
+                type: string
         secrets:
             BULK_EMAIL_REPO_TOKEN:
                 required: false
@@ -88,6 +93,11 @@ on:
                 required: true
                 default: false
                 type: boolean
+            test_email_to:
+                description: "Send one test email instead of the campaign"
+                required: false
+                default: ""
+                type: string
 
 permissions:
     contents: read
@@ -165,7 +175,7 @@ jobs:
 
     send:
         name: Send campaign through SES
-        if: ${{ inputs.execute_send }}
+        if: ${{ inputs.execute_send || inputs.test_email_to != '' }}
         needs: preflight
         runs-on: ubuntu-latest
         environment: production
@@ -202,11 +212,24 @@ jobs:
               working-directory: react-email-templates
               run: npm ci
 
-            - name: Send campaign
+            - name: Deliver email
               working-directory: bulk-email
+              env:
+                  EXECUTE_SEND: ${{ inputs.execute_send }}
+                  TEST_EMAIL_TO: ${{ inputs.test_email_to }}
               run: |
-                  npm run start -- send \
-                    --campaign-id "${{ inputs.campaign_id }}" \
-                    --template-dir ../react-email-templates/emails/hackthehill \
-                    --template "${{ inputs.template }}" \
-                    --yes
+                  if [ -n "$TEST_EMAIL_TO" ]; then
+                    if [ "$EXECUTE_SEND" = "true" ]; then
+                      echo "test_email_to and execute_send are mutually exclusive" >&2
+                      exit 1
+                    fi
+                    npm run start -- test --to "$TEST_EMAIL_TO" \
+                      --template-dir ../react-email-templates/emails/hackthehill \
+                      --template "${{ inputs.template }}"
+                  else
+                    npm run start -- send \
+                      --campaign-id "${{ inputs.campaign_id }}" \
+                      --template-dir ../react-email-templates/emails/hackthehill \
+                      --template "${{ inputs.template }}" \
+                      --yes
+                  fi
