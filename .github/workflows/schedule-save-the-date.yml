@@ -2,8 +2,8 @@ name: Schedule Save-the-Date
 
 on:
     schedule:
-        # 10:00 AM EDT on July 14, 2026. GitHub Actions schedules use UTC.
-        - cron: "0 14 14 7 *"
+        # 10:00 AM EDT on July 15, 2026. GitHub Actions schedules use UTC.
+        - cron: "0 14 15 7 *"
 
 permissions:
     contents: read
@@ -17,7 +17,7 @@ jobs:
         steps:
             - id: date
               env:
-                  EXPECTED_DATE: "2026-07-14"
+                  EXPECTED_DATE: "2026-07-15"
               run: |
                   if [ "$(date -u +%Y-%m-%d)" = "$EXPECTED_DATE" ]; then
                     echo "run=true" >> "$GITHUB_OUTPUT"
