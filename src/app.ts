@@ -38,7 +38,7 @@ import {
 	parseUnsubscribeKeyring,
 } from "./utils.js";
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const DEFAULT_MAX_RECIPIENTS = 10_000;
 const DEFAULT_MAX_HTML_BYTES = 256 * 1024;
