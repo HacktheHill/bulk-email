@@ -5,8 +5,15 @@ updates:
     schedule:
       interval: weekly
     groups:
-      npm-dependencies:
+      react-runtime:
+        patterns: ["react", "react-dom", "@types/react"]
+      routine-updates:
         patterns: ["*"]
+        exclude-patterns: ["react", "react-dom", "@types/react"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
