@@ -45,8 +45,8 @@
 		"fs-extra": "^11.3.6",
 		"html-to-text": "^10.0.0",
 		"inquirer": "^14.0.2",
-		"react": "19.2.7",
-		"react-dom": "19.2.7",
+		"react": "19.2.8",
+		"react-dom": "19.2.8",
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
