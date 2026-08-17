@@ -49,6 +49,7 @@ export async function renderCampaign(input: {
 		const html = applyPlaceholders(
 			await render(React.createElement(input.template.default, props)),
 			props,
+			true,
 		);
 		const text = convert(html, {
 			wordwrap: 120,

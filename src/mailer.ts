@@ -106,16 +106,26 @@ export function isAmbiguousSesError(error: unknown): boolean {
 		|| new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]).has(String(networkError.code ?? ""));
 }
 
-export function applyPlaceholders(input: string, values: TemplateProps): string {
+export function applyPlaceholders(input: string, values: TemplateProps, escapeHtml = false): string {
 	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
 		const value = values[key];
 		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
 			throw new Error(`Template contains an unresolved placeholder: ${key}`);
 		}
-		return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+		const strValue = typeof value === "string" || typeof value === "number" || typeof value === "boolean"
 			? String(value)
 			: (() => { throw new Error(`Template placeholder ${key} is not a scalar value`); })();
+		return escapeHtml ? escapeForHtml(strValue) : strValue;
 	});
+}
+
+function escapeForHtml(str: string): string {
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
 }
 
 function delay(milliseconds: number): Promise<void> {
