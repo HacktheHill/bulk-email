@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SendEmailCommand, type SESv2Client } from "@aws-sdk/client-sesv2";
-import { isAmbiguousSesError, sendWithRetry } from "../src/mailer.js";
+import { isAmbiguousSesError, sendWithRetry, applyPlaceholders } from "../src/mailer.js";
 
 test("retries transient SES errors and includes one-click unsubscribe headers", async () => {
 	const commands: SendEmailCommand[] = [];
@@ -47,6 +47,17 @@ test("classifies transport timeouts and resets as ambiguous", () => {
 	assert.equal(isAmbiguousSesError({ name: "TimeoutError" }), true);
 	assert.equal(isAmbiguousSesError({ code: "ECONNRESET" }), true);
 	assert.equal(isAmbiguousSesError({ name: "BadRequestException" }), false);
+});
+
+test("applyPlaceholders escapes HTML when escapeHtml is true", () => {
+	const html = "<div>Hello {{ name }}</div>";
+	const props = { name: "<script>alert('1' & \"2\")</script>" };
+
+	const resultUnescaped = applyPlaceholders(html, props, false);
+	assert.equal(resultUnescaped, "<div>Hello <script>alert('1' & \"2\")</script></div>");
+
+	const resultEscaped = applyPlaceholders(html, props, true);
+	assert.equal(resultEscaped, "<div>Hello &lt;script&gt;alert(&#39;1&#39; &amp; &quot;2&quot;)&lt;/script&gt;</div>");
 });
 
 test("refuses to send an empty rendered message body", async () => {

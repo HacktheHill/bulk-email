@@ -1,5 +1,5 @@
 import { render } from "@react-email/render";
-import { compile } from "html-to-text";
+import { convert } from "html-to-text";
 import * as React from "react";
 import type { TemplateProps } from "./mailer.js";
 import { applyPlaceholders } from "./mailer.js";
@@ -34,14 +34,6 @@ export async function renderCampaign(input: {
 	const rendered: RenderedMessage[] = [];
 	let totalBytes = 0;
 
-	// ⚡ Bolt optimization: Pre-compile html-to-text options outside the loop.
-	// This avoids recompiling the options object for every single recipient in a campaign,
-	// drastically improving CPU efficiency and throughput during bulk renders.
-	const convertToText = compile({
-		wordwrap: 120,
-		selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
-	});
-
 	for (const recipient of input.recipients) {
 		validateRequiredFields(input.template.metadata, recipient);
 		const email = String(recipient.email);
@@ -57,8 +49,12 @@ export async function renderCampaign(input: {
 		const html = applyPlaceholders(
 			await render(React.createElement(input.template.default, props)),
 			props,
+			true,
 		);
-		const text = convertToText(html);
+		const text = convert(html, {
+			wordwrap: 120,
+			selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
+		});
 		validateRenderedMessage({ metadata: input.template.metadata, html, text, unsubscribeUrl });
 		const htmlBytes = Buffer.byteLength(html, "utf8");
 		const textBytes = Buffer.byteLength(text, "utf8");
