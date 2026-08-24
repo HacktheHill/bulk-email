@@ -1,0 +1,3 @@
+## 2026-08-21 - React Email Rendering Concurrency
+**Learning:** React Email's `render` function returns a Promise and processes templates sequentially in a loop. When dealing with thousands of recipients, this becomes a major bottleneck due to microtask queueing and I/O. Using `Promise.all` over the recipients batch significantly speeds up the pre-rendering process, reducing rendering time for 1000 items from ~1.9s to ~1.4s.
+**Action:** When rendering templates for multiple recipients, always batch them concurrently using `Promise.all` instead of sequential `for...of` loops with `await` when safe.

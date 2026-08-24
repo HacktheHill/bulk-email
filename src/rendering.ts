@@ -31,10 +31,7 @@ export async function renderCampaign(input: {
 	if (input.recipients.length > input.limits.maxRecipients) {
 		throw new Error(`Campaign exceeds the ${input.limits.maxRecipients}-recipient limit`);
 	}
-	const rendered: RenderedMessage[] = [];
-	let totalBytes = 0;
-
-	for (const recipient of input.recipients) {
+	const rendered = await Promise.all(input.recipients.map(async (recipient) => {
 		validateRequiredFields(input.template.metadata, recipient);
 		const email = String(recipient.email);
 		const unsubscribeUrl = input.template.metadata.audience === "subscribers"
@@ -60,13 +57,28 @@ export async function renderCampaign(input: {
 		const textBytes = Buffer.byteLength(text, "utf8");
 		if (htmlBytes > input.limits.maxHtmlBytes) throw new Error(`Rendered HTML exceeds ${input.limits.maxHtmlBytes} bytes`);
 		if (textBytes > input.limits.maxTextBytes) throw new Error(`Rendered text exceeds ${input.limits.maxTextBytes} bytes`);
-		totalBytes += htmlBytes + textBytes;
-		if (totalBytes > input.limits.maxTotalBytes) {
-			throw new Error(`Pre-rendered campaign exceeds ${input.limits.maxTotalBytes} bytes`);
-		}
-		rendered.push({ recipient: props, email, subject, html, text, unsubscribeUrl });
+		return { recipient: props, email, subject, html, text, unsubscribeUrl, htmlBytes, textBytes };
+	}));
+
+	let totalBytes = 0;
+	for (const message of rendered) {
+		totalBytes += message.htmlBytes + message.textBytes;
 	}
-	return rendered;
+	if (totalBytes > input.limits.maxTotalBytes) {
+		throw new Error(`Pre-rendered campaign exceeds ${input.limits.maxTotalBytes} bytes`);
+	}
+
+	return rendered.map((message) => {
+		const result: RenderedMessage = {
+			recipient: message.recipient,
+			email: message.email,
+			subject: message.subject,
+			html: message.html,
+			text: message.text,
+			unsubscribeUrl: message.unsubscribeUrl,
+		};
+		return result;
+	});
 }
 
 export function validateRenderedMessage(input: {
