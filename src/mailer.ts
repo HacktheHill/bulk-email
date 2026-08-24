@@ -107,7 +107,10 @@ export function isAmbiguousSesError(error: unknown): boolean {
 }
 
 export function applyPlaceholders(input: string, values: TemplateProps, escapeHtml = false): string {
+	const cache = new Map<string, string>();
 	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
+		const cached = cache.get(key);
+		if (cached !== undefined) return cached;
 		const value = values[key];
 		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
 			throw new Error(`Template contains an unresolved placeholder: ${key}`);
@@ -115,7 +118,9 @@ export function applyPlaceholders(input: string, values: TemplateProps, escapeHt
 		const strValue = typeof value === "string" || typeof value === "number" || typeof value === "boolean"
 			? String(value)
 			: (() => { throw new Error(`Template placeholder ${key} is not a scalar value`); })();
-		return escapeHtml ? escapeForHtml(strValue) : strValue;
+		const result = escapeHtml ? escapeForHtml(strValue) : strValue;
+		cache.set(key, result);
+		return result;
 	});
 }
 
