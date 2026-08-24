@@ -1,5 +1,5 @@
 import { render } from "@react-email/render";
-import { convert } from "html-to-text";
+import { compile } from "html-to-text";
 import * as React from "react";
 import type { TemplateProps } from "./mailer.js";
 import { applyPlaceholders } from "./mailer.js";
@@ -34,6 +34,12 @@ export async function renderCampaign(input: {
 	const rendered: RenderedMessage[] = [];
 	let totalBytes = 0;
 
+	// Pre-compile html-to-text conversion options to avoid rebuilding the decision tree per recipient
+	const htmlToText = compile({
+		wordwrap: 120,
+		selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
+	});
+
 	for (const recipient of input.recipients) {
 		validateRequiredFields(input.template.metadata, recipient);
 		const email = String(recipient.email);
@@ -51,10 +57,7 @@ export async function renderCampaign(input: {
 			props,
 			true,
 		);
-		const text = convert(html, {
-			wordwrap: 120,
-			selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
-		});
+		const text = htmlToText(html);
 		validateRenderedMessage({ metadata: input.template.metadata, html, text, unsubscribeUrl });
 		const htmlBytes = Buffer.byteLength(html, "utf8");
 		const textBytes = Buffer.byteLength(text, "utf8");
