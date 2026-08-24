@@ -1,0 +1,3 @@
+## 2026-08-24 - Avoid unnecessary object spreads in bulk processing loops
+**Learning:** In hot loops processing large arrays (like deduplicating 100k+ recipient objects), unconditionally using object spread `{ ...recipient, email: normalizedEmail }` to ensure properties are correct creates significant garbage collection pressure and CPU overhead, even when the property is already correct in 99% of cases.
+**Action:** Before spreading an object in a performance-critical loop just to update a property, check if the property already has the desired value. If it does, push or return the original object reference instead.
