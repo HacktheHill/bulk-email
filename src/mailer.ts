@@ -106,7 +106,7 @@ export function isAmbiguousSesError(error: unknown): boolean {
 		|| new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]).has(String(networkError.code ?? ""));
 }
 
-export function applyPlaceholders(input: string, values: TemplateProps, escapeHtml = false): string {
+export function applyPlaceholders(input: string, values: TemplateProps, escapeHtml = true): string {
 	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
 		const value = values[key];
 		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {

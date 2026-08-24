@@ -44,7 +44,7 @@ export async function renderCampaign(input: {
 			throw new Error("Subscriber templates require a configured signed unsubscribe URL");
 		}
 		const props = unsubscribeUrl ? { ...recipient, unsubscribeUrl } : recipient;
-		const subject = applyPlaceholders(input.template.metadata.subject, props).trim();
+		const subject = applyPlaceholders(input.template.metadata.subject, props, false).trim();
 		if (!subject) throw new Error(`Template ${input.template.metadata.id} rendered an empty subject`);
 		const html = applyPlaceholders(
 			await render(React.createElement(input.template.default, props)),
