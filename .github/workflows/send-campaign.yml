@@ -166,11 +166,14 @@ jobs:
 
             - name: Run production-shaped dry run
               working-directory: bulk-email
+              env:
+                  CAMPAIGN_ID: ${{ inputs.campaign_id }}
+                  TEMPLATE: ${{ inputs.template }}
               run: |
                   npm run start -- send \
-                    --campaign-id "${{ inputs.campaign_id }}" \
+                    --campaign-id "$CAMPAIGN_ID" \
                     --template-dir ../react-email-templates/emails/hackthehill \
-                    --template "${{ inputs.template }}" \
+                    --template "$TEMPLATE" \
                     --dry-run
 
     send:
@@ -217,6 +220,8 @@ jobs:
               env:
                   EXECUTE_SEND: ${{ inputs.execute_send }}
                   TEST_EMAIL_TO: ${{ inputs.test_email_to }}
+                  CAMPAIGN_ID: ${{ inputs.campaign_id }}
+                  TEMPLATE: ${{ inputs.template }}
               run: |
                   if [ -n "$TEST_EMAIL_TO" ]; then
                     if [ "$EXECUTE_SEND" = "true" ]; then
@@ -225,11 +230,11 @@ jobs:
                     fi
                     npm run start -- test --to "$TEST_EMAIL_TO" \
                       --template-dir ../react-email-templates/emails/hackthehill \
-                      --template "${{ inputs.template }}"
+                      --template "$TEMPLATE"
                   else
                     npm run start -- send \
-                      --campaign-id "${{ inputs.campaign_id }}" \
+                      --campaign-id "$CAMPAIGN_ID" \
                       --template-dir ../react-email-templates/emails/hackthehill \
-                      --template "${{ inputs.template }}" \
+                      --template "$TEMPLATE" \
                       --yes
                   fi
