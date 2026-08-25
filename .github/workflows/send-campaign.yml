@@ -130,7 +130,7 @@ jobs:
         timeout-minutes: 20
         steps:
             - name: Check out bulk-email
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              uses: actions/checkout@v4
               with:
                   repository: HacktheHill/bulk-email
                   ref: ${{ inputs.bulk_email_ref }}
@@ -138,7 +138,7 @@ jobs:
                   path: bulk-email
 
             - name: Check out email templates
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              uses: actions/checkout@v4
               with:
                   repository: HacktheHill/react-email-templates
                   ref: ${{ inputs.template_ref }}
@@ -146,7 +146,7 @@ jobs:
                   path: react-email-templates
 
             - name: Set up Node.js
-              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              uses: actions/setup-node@v4
               with:
                   node-version: "22.x"
                   cache: npm
@@ -185,7 +185,7 @@ jobs:
         timeout-minutes: 60
         steps:
             - name: Check out bulk-email
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              uses: actions/checkout@v4
               with:
                   repository: HacktheHill/bulk-email
                   ref: ${{ inputs.bulk_email_ref }}
@@ -193,7 +193,7 @@ jobs:
                   path: bulk-email
 
             - name: Check out email templates
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              uses: actions/checkout@v4
               with:
                   repository: HacktheHill/react-email-templates
                   ref: ${{ inputs.template_ref }}
@@ -201,7 +201,7 @@ jobs:
                   path: react-email-templates
 
             - name: Set up Node.js
-              uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+              uses: actions/setup-node@v4
               with:
                   node-version: "22.x"
                   cache: npm
