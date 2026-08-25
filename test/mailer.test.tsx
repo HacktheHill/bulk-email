@@ -49,15 +49,12 @@ test("classifies transport timeouts and resets as ambiguous", () => {
 	assert.equal(isAmbiguousSesError({ name: "BadRequestException" }), false);
 });
 
-test("applyPlaceholders escapes HTML when escapeHtml is true", () => {
-	const html = "<div>Hello {{ name }}</div>";
-	const props = { name: "<script>alert('1' & \"2\")</script>" };
+test("applyPlaceholders interpolates plain text values", () => {
+	const subject = "Update for {{ name }}";
+	const props = { name: "Alex" };
 
-	const resultUnescaped = applyPlaceholders(html, props, false);
-	assert.equal(resultUnescaped, "<div>Hello <script>alert('1' & \"2\")</script></div>");
-
-	const resultEscaped = applyPlaceholders(html, props, true);
-	assert.equal(resultEscaped, "<div>Hello &lt;script&gt;alert(&#39;1&#39; &amp; &quot;2&quot;)&lt;/script&gt;</div>");
+	const result = applyPlaceholders(subject, props);
+	assert.equal(result, "Update for Alex");
 });
 
 test("refuses to send an empty rendered message body", async () => {

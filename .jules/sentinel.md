@@ -1,5 +1,5 @@
 ## 2024-08-17 - HTML injection via applyPlaceholders
 
-**Vulnerability:** The `applyPlaceholders` utility used to replace placeholders like `{{ name }}` in rendered templates does not escape output. If a user provided an unescaped placeholder in the HTML email component (as opposed to passing props directly to React), string substitution happens after React's HTML escaping, exposing the final HTML payload to Cross-Site Scripting (XSS).
-**Learning:** Even though React handles output escaping during the `render` step, any string replacements performed *after* React has completed rendering can introduce injection vulnerabilities if not carefully controlled. If the template uses `applyPlaceholders` directly on HTML text, those placeholders aren't protected by React.
-**Prevention:** I modified `applyPlaceholders` in `src/mailer.ts` to accept an `escapeHtml` argument. In `src/rendering.ts`, this argument is passed as `true` when applying placeholders against the `html` content.
+**Vulnerability:** The legacy `applyPlaceholders` utility replaced placeholders like `{{ name }}` directly on rendered HTML string output without escaping. If user input contained HTML characters, post-render substitution bypassed React's JSX escaping.
+**Learning:** Post-processing rendered HTML with string substitutions breaks React's safety model. React email components must receive recipient data directly as React props so React handles all output escaping natively during component render.
+**Prevention:** Removed `applyPlaceholders` from the HTML rendering pipeline in `src/rendering.ts` entirely. All dynamic variables are passed as typed React props into component render calls. `applyPlaceholders` is retained exclusively for plain-text email subject line formatting.

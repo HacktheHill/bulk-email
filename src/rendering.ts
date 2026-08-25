@@ -46,11 +46,7 @@ export async function renderCampaign(input: {
 		const props = unsubscribeUrl ? { ...recipient, unsubscribeUrl } : recipient;
 		const subject = applyPlaceholders(input.template.metadata.subject, props).trim();
 		if (!subject) throw new Error(`Template ${input.template.metadata.id} rendered an empty subject`);
-		const html = applyPlaceholders(
-			await render(React.createElement(input.template.default, props)),
-			props,
-			true,
-		);
+		const html = await render(React.createElement(input.template.default, props));
 		const text = convert(html, {
 			wordwrap: 120,
 			selectors: [{ selector: "a", options: { hideLinkHrefIfSameAsText: true } }],
