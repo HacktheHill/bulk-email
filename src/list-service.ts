@@ -110,7 +110,7 @@ export async function fetchTextWithTimeout(
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
 	try {
-		const response = await fetch(url, { ...init, signal: controller.signal });
+		const response = await fetch(url, { ...init, signal: controller.signal, redirect: "error" });
 		if (!response.ok) {
 			throw new Error(`${endpointName} returned ${response.status}`);
 		}
