@@ -25,7 +25,12 @@ export function deduplicateRecipients<T extends EmailRecipient>(
 		}
 
 		seen.add(normalizedEmail);
-		unique.push({ ...recipient, email: normalizedEmail });
+		// Bolt: Avoid unnecessary object allocation if the email is already normalized
+		if (recipient.email === normalizedEmail) {
+			unique.push(recipient);
+		} else {
+			unique.push({ ...recipient, email: normalizedEmail });
+		}
 	}
 
 	return { recipients: unique, duplicates: recipients.length - unique.length };

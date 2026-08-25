@@ -1,0 +1,3 @@
+## 2024-03-24 - Avoid Unnecessary Object Allocation in Deduplication Loops
+**Learning:** In standard utility loops mapping or reducing data (like `deduplicateRecipients`), using `{ ...recipient, email: normalizedEmail }` causes constant allocation. If the field is already normalized, allocating a new object can add up, causing a memory churn bottleneck.
+**Action:** When mapping over an array to change properties, explicitly check if the properties need to be changed first, and if not, push the original object reference rather than re-allocating via spread syntax.
