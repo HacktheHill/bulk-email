@@ -404,9 +404,9 @@ function filterRecipients(
 	let sesSuppressed = 0;
 	for (const recipient of recipients) {
 		const normalized = normalizeEmail(recipient.email);
-		if (accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
 		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		if (accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		pending.push(recipient);
 	}
 	return { pending, alreadyAccepted, suppressed: listSuppressed + sesSuppressed, listSuppressed, sesSuppressed };
