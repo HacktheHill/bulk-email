@@ -48,7 +48,7 @@ function safeCompare(a: string, b: string): boolean {
 }
 
 function base64UrlEncode(input: Buffer): string {
-	return input.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+	return input.toString("base64url");
 }
 
 function decodeBase64Url(input: string): string {
