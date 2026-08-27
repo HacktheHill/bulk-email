@@ -86,24 +86,31 @@ export function createPerSecondRateLimiter(maxPerSecond: number): RateLimiter {
 	};
 }
 
+// ⚡ Bolt Optimization: Hoisted Set allocations to prevent O(N) reconstruction and memory allocation on every error check
+const RETRYABLE_ERROR_NAMES = new Set([
+	"Throttling",
+	"ThrottlingException",
+	"TooManyRequestsException",
+	"ServiceUnavailableException",
+	"InternalServiceError",
+]);
+
 export function isRetryableSesError(error: unknown): boolean {
 	if (!error || typeof error !== "object") return false;
 	const awsError = error as { name?: string; $metadata?: { httpStatusCode?: number } };
 	if ((awsError.$metadata?.httpStatusCode ?? 0) >= 500) return true;
-	return new Set([
-		"Throttling",
-		"ThrottlingException",
-		"TooManyRequestsException",
-		"ServiceUnavailableException",
-		"InternalServiceError",
-	]).has(awsError.name ?? "");
+	return RETRYABLE_ERROR_NAMES.has(awsError.name ?? "");
 }
+
+// ⚡ Bolt Optimization: Hoisted Set allocations to prevent O(N) reconstruction and memory allocation on every error check
+const AMBIGUOUS_ERROR_NAMES = new Set(["AbortError", "TimeoutError", "RequestTimeout"]);
+const AMBIGUOUS_ERROR_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]);
 
 export function isAmbiguousSesError(error: unknown): boolean {
 	if (!error || typeof error !== "object") return false;
 	const networkError = error as { name?: unknown; code?: unknown };
-	return new Set(["AbortError", "TimeoutError", "RequestTimeout"]).has(String(networkError.name ?? ""))
-		|| new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]).has(String(networkError.code ?? ""));
+	return AMBIGUOUS_ERROR_NAMES.has(String(networkError.name ?? ""))
+		|| AMBIGUOUS_ERROR_CODES.has(String(networkError.code ?? ""));
 }
 
 export function applyPlaceholders(input: string, values: TemplateProps): string {
