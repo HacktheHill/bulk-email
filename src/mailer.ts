@@ -107,6 +107,8 @@ export function isAmbiguousSesError(error: unknown): boolean {
 }
 
 export function applyPlaceholders(input: string, values: TemplateProps): string {
+	// ⚡ Bolt: Fast-path return before executing the regex to save CPU cycles on static subjects without placeholders
+	if (!input.includes("{{")) return input;
 	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
 		const value = values[key];
 		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {

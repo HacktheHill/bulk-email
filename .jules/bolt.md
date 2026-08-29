@@ -9,3 +9,6 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+## 2023-10-27 - CPU-Bound Concurrency Pitfalls
+**Learning:** Attempting to parallelize synchronous, CPU-bound React rendering in Node.js using `Promise.all` over an array of async callbacks does not actually run them concurrently due to the single-threaded event loop. Furthermore, doing so breaks the fail-fast memory limits (e.g. `maxTotalBytes`) by evaluating all items in memory simultaneously before checking the constraint, leading to significant memory and CPU regressions during failure scenarios.
+**Action:** Never use `Promise.all` to "parallelize" CPU-bound loops in Node.js. Focus on micro-optimizations inside the loop, such as fast-path short-circuits (`String.prototype.includes()`) before expensive regex evaluations.
