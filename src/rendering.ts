@@ -77,7 +77,8 @@ export function validateRenderedMessage(input: {
 	if (!input.html.trim() || !input.text.trim()) {
 		throw new Error("Template rendered an empty message body; refusing to send");
 	}
-	if (/\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.html) || /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.text)) {
+	const placeholderRegex = /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/;
+	if ((input.html.includes("{{") && placeholderRegex.test(input.html)) || (input.text.includes("{{") && placeholderRegex.test(input.text))) {
 		throw new Error("Template contains unresolved placeholders");
 	}
 	if (input.metadata.audience === "subscribers") {
