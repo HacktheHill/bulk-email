@@ -68,6 +68,8 @@ export async function renderCampaign(input: {
 	return rendered;
 }
 
+const UNRESOLVED_PLACEHOLDER_REGEX = /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/;
+
 export function validateRenderedMessage(input: {
 	metadata: EmailTemplateMetadata;
 	html: string;
@@ -77,7 +79,11 @@ export function validateRenderedMessage(input: {
 	if (!input.html.trim() || !input.text.trim()) {
 		throw new Error("Template rendered an empty message body; refusing to send");
 	}
-	if (/\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.html) || /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.text)) {
+	// Fast path: Only run the expensive regex if the placeholder prefix is present in the large rendered strings
+	if (input.html.includes("{{") && UNRESOLVED_PLACEHOLDER_REGEX.test(input.html)) {
+		throw new Error("Template contains unresolved placeholders");
+	}
+	if (input.text.includes("{{") && UNRESOLVED_PLACEHOLDER_REGEX.test(input.text)) {
 		throw new Error("Template contains unresolved placeholders");
 	}
 	if (input.metadata.audience === "subscribers") {
