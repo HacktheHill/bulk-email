@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-08-22 - Regex Pre-filtering with Includes
+**Learning:** Checking for the presence of a known literal substring with `.includes()` (which uses a fast native O(n) search) is significantly faster than executing a regular expression test on a large string, especially when the regex has no matches.
+**Action:** When running regular expressions to find specific sequences on very large strings in hot loops, always try to pre-filter with a fast `.includes()` check for a known literal part of the target sequence if the match is rare.
