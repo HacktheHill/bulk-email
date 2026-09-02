@@ -15,3 +15,8 @@
 **Vulnerability:** The `fetch` calls in `fetchTextWithTimeout` were following HTTP redirects by default. If a configured endpoint redirected the request (or if an attacker compromised the endpoint URL), `fetch` would follow the redirect. This could lead to Server-Side Request Forgery (SSRF) against internal services (like AWS IMDS) and could leak the cross-origin `Authorization` headers to the redirect target.
 **Learning:** By default, the `fetch` API follows redirects and will send headers (including `Authorization`) to the new destination.
 **Prevention:** Always add `redirect: "error"` (or `"manual"`) to `fetch` calls handling sensitive headers or interacting with external endpoints to prevent unintentional redirection.
+
+## 2024-06-25 - [CRITICAL] Prototype lookup DoS in JSON configuration parsing
+**Vulnerability:** A Denial of Service via prototype lookup in `parseUnsubscribeKeyring`. The `UNSUBSCRIBE_TOKEN_KEYS` configuration is parsed into a plain Javascript object (`{}`). Since the key validation regex `^[A-Za-z0-9_-]{1,32}$` permits the string `__proto__`, an attacker could supply `{"__proto__": "..."}`. When the code subsequently looks up the active key using `keyring[activeKeyId]` (e.g. if `activeKeyId` was manipulated or set to `__proto__`), the lookup hits `Object.prototype`, throwing a `TypeError` in `createHmac` which expects a string or Buffer.
+**Learning:** Object properties inherited from `Object.prototype` can bypass type checks if a plain `{}` object is used as a dictionary.
+**Prevention:** Use `Object.create(null)` when dynamically creating dictionaries from external inputs to ensure they have no inherited properties.
