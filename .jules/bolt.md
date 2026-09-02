@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-05-18 - Fast-path Regex Execution
+**Learning:** Checking a regular expression against a large string (like a fully rendered HTML email template) is slow, especially when it's checking for a substring pattern like unresolved `{{placeholder}}`s. V8's regex engine is significantly slower than its highly optimized basic string operations.
+**Action:** Always short-circuit expensive regex lookups using a fast-path string inclusion check (e.g. `.includes("{{")`) when you expect the string will usually not contain the pattern (which is the case for a template where all placeholders have resolved). Extract regexes to module scope to avoid re-compiling the regex object in loops.
