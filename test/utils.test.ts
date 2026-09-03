@@ -43,9 +43,11 @@ test("builds a signed unsubscribe URL", () => {
 });
 
 test("parses and validates the unsubscribe keyring", () => {
+	const expected = Object.create(null);
+	expected["key-1"] = "01234567890123456789012345678901";
 	assert.deepEqual(
 		parseUnsubscribeKeyring('{"key-1":"01234567890123456789012345678901"}'),
-		{ "key-1": "01234567890123456789012345678901" },
+		expected,
 	);
 	assert.throws(() => parseUnsubscribeKeyring('{"bad key":"short"}'), /invalid key/);
 });
