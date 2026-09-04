@@ -68,7 +68,7 @@ export function parseUnsubscribeKeyring(value: string | undefined): Record<strin
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		throw new Error("UNSUBSCRIBE_TOKEN_KEYS must be a JSON object");
 	}
-	const result: Record<string, string> = {};
+	const result: Record<string, string> = Object.create(null);
 	for (const [keyId, secret] of Object.entries(parsed)) {
 		if (!/^[A-Za-z0-9_-]{1,32}$/.test(keyId) || typeof secret !== "string" || secret.length < 32) {
 			throw new Error("UNSUBSCRIBE_TOKEN_KEYS contains an invalid key");
