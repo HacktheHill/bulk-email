@@ -9,3 +9,6 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+## 2023-09-05 - Fast-Path Regex Check for Placeholders
+**Learning:** Using regex inside a loop (like iterating through rendered emails) to check for a simple character combination can be extremely slow, particularly if the string size is large.
+**Action:** Extract stateless regex to a module-level constant. Guard the regex evaluation with a native fast-path `.includes()` check that acts as a cheap precondition to avoid calling the regex engine unless necessary.
