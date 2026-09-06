@@ -45,9 +45,13 @@ test("builds a signed unsubscribe URL", () => {
 test("parses and validates the unsubscribe keyring", () => {
 	assert.deepEqual(
 		parseUnsubscribeKeyring('{"key-1":"01234567890123456789012345678901"}'),
-		{ "key-1": "01234567890123456789012345678901" },
+		Object.assign(Object.create(null), { "key-1": "01234567890123456789012345678901" }),
 	);
 	assert.throws(() => parseUnsubscribeKeyring('{"bad key":"short"}'), /invalid key/);
+
+	const parsed = parseUnsubscribeKeyring('{"constructor":"01234567890123456789012345678901"}');
+	assert.equal(parsed.constructor, "01234567890123456789012345678901");
+	assert.equal(Object.getPrototypeOf(parsed), null);
 });
 
 test("computes bounded retry backoff with deterministic jitter", () => {
