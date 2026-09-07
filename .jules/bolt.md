@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-05-18 - Fast-path string checks before Regex in loops
+**Learning:** Evaluating Regexes (even compiled ones) on large strings like rendered email HTML bodies is computationally expensive when executed inside a loop for thousands of recipients. Recompiling them on every iteration compounds the issue.
+**Action:** Always extract Regexes outside of functions or loops to compile them once. Use fast-path string checks (like `String.prototype.includes`) to completely bypass the expensive Regex evaluation whenever possible.
