@@ -35,19 +35,19 @@
 	},
 	"bin": "dist/app.js",
 	"dependencies": {
-		"@aws-sdk/client-sesv2": "3.1116.0",
+		"@aws-sdk/client-sesv2": "3.1127.0",
 		"@react-email/components": "1.0.12",
 		"@react-email/render": "2.1.0",
-		"@smithy/node-http-handler": "4.11.3",
+		"@smithy/node-http-handler": "4.12.1",
 		"commander": "^15.0.0",
 		"csv-parse": "^7.0.2",
 		"dotenv": "^17.4.2",
 		"fs-extra": "^11.4.0",
 		"html-to-text": "^10.0.0",
-		"inquirer": "^14.1.0",
+		"inquirer": "^14.2.1",
 		"react": "19.2.8",
 		"react-dom": "19.2.8",
-		"zod": "^4.4.3"
+		"zod": "^4.5.4"
 	},
 	"devDependencies": {
 		"@eslint/js": "10.0.1",
@@ -55,10 +55,10 @@
 		"@types/html-to-text": "^9.0.4",
 		"@types/react": "19.2.18",
 		"esbuild": "^0.28.2",
-		"eslint": "10.9.0",
-		"tsx": "^4.23.12",
+		"eslint": "10.10.0",
+		"tsx": "^4.23.13",
 		"typescript": "^5.9.3",
-		"typescript-eslint": "8.67.0"
+		"typescript-eslint": "8.69.0"
 	},
 	"allowScripts": {
 		"esbuild@0.28.2": true
