@@ -15,3 +15,8 @@
 **Vulnerability:** The `fetch` calls in `fetchTextWithTimeout` were following HTTP redirects by default. If a configured endpoint redirected the request (or if an attacker compromised the endpoint URL), `fetch` would follow the redirect. This could lead to Server-Side Request Forgery (SSRF) against internal services (like AWS IMDS) and could leak the cross-origin `Authorization` headers to the redirect target.
 **Learning:** By default, the `fetch` API follows redirects and will send headers (including `Authorization`) to the new destination.
 **Prevention:** Always add `redirect: "error"` (or `"manual"`) to `fetch` calls handling sensitive headers or interacting with external endpoints to prevent unintentional redirection.
+
+## 2025-03-05 - Prototype pollution via user-provided JSON
+**Vulnerability:** Parsing JSON keys directly into `{}` allowed overriding `__proto__`, which could lead to DoS when the value was passed to `createHmac` or other functions expecting a string, but retrieving an inherited property like `toString`.
+**Learning:** JavaScript plain objects inherit from `Object.prototype`, so initializing dictionaries with `{}` when populated with user input allows prototype pollution.
+**Prevention:** Use `Object.create(null)` to initialize dictionaries that hold user-provided keys, ensuring they have no prototype.
