@@ -15,3 +15,8 @@
 **Vulnerability:** The `fetch` calls in `fetchTextWithTimeout` were following HTTP redirects by default. If a configured endpoint redirected the request (or if an attacker compromised the endpoint URL), `fetch` would follow the redirect. This could lead to Server-Side Request Forgery (SSRF) against internal services (like AWS IMDS) and could leak the cross-origin `Authorization` headers to the redirect target.
 **Learning:** By default, the `fetch` API follows redirects and will send headers (including `Authorization`) to the new destination.
 **Prevention:** Always add `redirect: "error"` (or `"manual"`) to `fetch` calls handling sensitive headers or interacting with external endpoints to prevent unintentional redirection.
+
+## 2024-09-09 - Fix prototype pollution risk in dictionary initialization
+**Vulnerability:** The `parseUnsubscribeKeyring` function in `src/utils.ts` initialized its result dictionary with a plain object `{}`. Parsing user-controlled JSON or untrusted config into a plain object exposes the application to prototype pollution or prototype lookup DOS if keys like `__proto__` are provided, which can lead to unexpected inherited properties being read or manipulated.
+**Learning:** JavaScript plain objects inherit from `Object.prototype`, making them unsafe to use as pure dictionary maps for external data. Any operation iterating or retrieving from them might hit prototype properties if the external input manages to inject keys like `__proto__`.
+**Prevention:** When creating objects intended to be used strictly as key-value dictionaries, especially when populated from JSON or user inputs, always initialize them with `Object.create(null)` to create a prototype-less object.
