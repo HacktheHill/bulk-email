@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-05-30 - Optimize Expensive Regex Validation
+**Learning:** Recompiling a regex pattern and blindly testing it against large HTML/text blocks for every rendered recipient adds overhead.
+**Action:** Extract regex patterns to module scope and gate execution behind fast `String.prototype.includes` checks when verifying templates.
