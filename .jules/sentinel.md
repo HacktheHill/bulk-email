@@ -15,3 +15,8 @@
 **Vulnerability:** The `fetch` calls in `fetchTextWithTimeout` were following HTTP redirects by default. If a configured endpoint redirected the request (or if an attacker compromised the endpoint URL), `fetch` would follow the redirect. This could lead to Server-Side Request Forgery (SSRF) against internal services (like AWS IMDS) and could leak the cross-origin `Authorization` headers to the redirect target.
 **Learning:** By default, the `fetch` API follows redirects and will send headers (including `Authorization`) to the new destination.
 **Prevention:** Always add `redirect: "error"` (or `"manual"`) to `fetch` calls handling sensitive headers or interacting with external endpoints to prevent unintentional redirection.
+
+## 2024-08-25 - Prototype Lookup DoS
+**Vulnerability:** Unsubscribe key ID derived from user input used directly for object property lookup on a plain object. User can pass `constructor` or `__proto__` to get a function/object back, which crashes `createHmac` causing DoS.
+**Learning:** Plain Javascript objects `{}` inherit properties from `Object.prototype`. Using user-provided keys for direct lookup allows accessing these inherited properties.
+**Prevention:** Use `Object.create(null)` or `Map` when using JavaScript objects as dictionaries for user-provided data or JSON parsing.
