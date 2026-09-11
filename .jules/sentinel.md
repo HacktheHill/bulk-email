@@ -15,3 +15,9 @@
 **Vulnerability:** The `fetch` calls in `fetchTextWithTimeout` were following HTTP redirects by default. If a configured endpoint redirected the request (or if an attacker compromised the endpoint URL), `fetch` would follow the redirect. This could lead to Server-Side Request Forgery (SSRF) against internal services (like AWS IMDS) and could leak the cross-origin `Authorization` headers to the redirect target.
 **Learning:** By default, the `fetch` API follows redirects and will send headers (including `Authorization`) to the new destination.
 **Prevention:** Always add `redirect: "error"` (or `"manual"`) to `fetch` calls handling sensitive headers or interacting with external endpoints to prevent unintentional redirection.
+
+## 2026-08-25 - Prototype Pollution via JSON Parsing
+
+**Vulnerability:** In `parseUnsubscribeKeyring`, the user-provided JSON string was parsed and copied into a plain `{}` object literal. If a user provided a `__proto__` key in the JSON, it could lead to unexpected behavior from inherited properties.
+**Learning:** Using `Object.create(null)` for objects that function as dictionaries prevents prototype lookup Denial of Service (DoS) and unexpected behavior from inherited properties like `__proto__`.
+**Prevention:** Prefer `Object.create(null)` over plain `{}` for any data structure treating arbitrary user input as keys, ensuring prototype properties are not accessible or overridable.
