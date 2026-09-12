@@ -86,7 +86,14 @@ export async function fetchTallyApplicants(token: string, formId: string): Promi
 		if (Buffer.byteLength(text) > 10 * 1024 * 1024) throw new Error("Tally page exceeds size limit");
 		let parsed: ReturnType<typeof parseApplicantPage>;
 		try { parsed = parseApplicantPage(JSON.parse(text)); }
-		catch { throw new Error("Tally returned an unexpected audience schema; no send is permitted"); }
+		catch (error) {
+			if (error instanceof z.ZodError) {
+				console.error("Tally schema mismatch:", JSON.stringify(error.issues.slice(0, 10).map(issue => ({ path: issue.path, code: issue.code }))));
+			} else if (error instanceof Error && !(error instanceof SyntaxError)) {
+				console.error(error.message);
+			}
+			throw new Error("Tally returned an unexpected audience schema; no send is permitted");
+		}
 		if (parsed.page !== page || parsed.ids.some(id => seen.has(id))) throw new Error("Tally pagination changed or repeated; retry a fresh preflight");
 		for (const id of parsed.ids) seen.add(id);
 		applicants.push(...parsed.applicants);
