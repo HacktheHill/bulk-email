@@ -31,4 +31,8 @@ test("extracts both applicant email fields but never the guardian email", () => 
 	assert.throws(() => parseApplicantPage(data), /missing an applicant email/);
 	data.submissions[0].isCompleted = false;
 	assert.equal(parseApplicantPage(data).missingEmail, 1);
+	data.submissions[0].responses = [{ questionId: "en", answer: "unfinished@" }];
+	assert.equal(parseApplicantPage(data).missingEmail, 1);
+	data.submissions[0].isCompleted = true;
+	assert.throws(() => parseApplicantPage(data), /Invalid completed applicant email/);
 });

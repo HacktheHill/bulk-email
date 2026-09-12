@@ -42,7 +42,10 @@ export function parseApplicantPage(data: unknown): { page: number; hasMore: bool
 			if (title === "Preferred Language / Langue préférée" && value === "Français") language = "fr";
 			if ((title === "Email address" || title === "Adresse courriel") && value?.trim()) {
 				const email = normalizeEmail(value);
-				if (!z.string().email().safeParse(email).success) throw new Error("Invalid applicant email in Tally; review the source record");
+				if (!z.string().email().safeParse(email).success) {
+					if (submission.isCompleted) throw new Error("Invalid completed applicant email in Tally; review the source record");
+					continue;
+				}
 				emails.add(email);
 			}
 		}
