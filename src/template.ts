@@ -17,6 +17,7 @@ export const emailTemplateMetadataSchema = z.object({
 	localization: z.enum(["bilingual", "localized"]),
 	subject: z.string().trim().min(1).max(998),
 	requiredFields: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9_]*$/)).max(100),
+	requiresExclusions: z.boolean().optional(),
 });
 
 export type EmailTemplateMetadata = z.infer<typeof emailTemplateMetadataSchema>;

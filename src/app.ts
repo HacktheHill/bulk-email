@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { confirmCampaignSend } from "./confirmation.js";
+import { excludeCampaignRecipients } from "./campaign-exclusions.js";
 import { processWithConcurrency } from "./concurrency.js";
 import { fetchCsvSnapshot, fetchSuppressedEmailSet } from "./list-service.js";
 import { createPerSecondRateLimiter, isAmbiguousSesError, sendWithRetry } from "./mailer.js";
@@ -54,6 +55,8 @@ addCommonOptions(program.command("send", { isDefault: true }))
 	.description("Preflight and send one campaign")
 	.option("--campaign-id <campaignId>", "Stable identifier used to resume a campaign")
 	.option("--purpose <purpose>", "Required non-promotional event/service purpose for provided-CSV templates")
+	.option("--exclude-file <file>", "CSV of applicant addresses to exclude from this campaign")
+	.option("--respect-list-suppressions", "Also apply email-list-manager suppressions to a provided-CSV campaign")
 	.option("--state-dir <stateDir>", "Campaign state root", ".bulk-email/campaigns")
 	.option("--dry-run", "Validate and summarize without sending")
 	.option("--yes", "Skip the final confirmation prompt")
@@ -149,6 +152,17 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 	await verifyTemplateDependencies(repository.packageJsonPath, path.resolve("package.json"));
 
 	const source = await loadCampaignRecipients(templateModule.metadata.audience, options);
+	if (templateModule.metadata.requiresExclusions && !rawOptions.excludeFile) {
+		throw new Error("This template requires --exclude-file to prevent applicant overlap");
+	}
+	if (rawOptions.excludeFile) {
+		const exclusions = await readRecipientCsv(String(rawOptions.excludeFile), options.maxCsvBytes);
+		const filtered = excludeCampaignRecipients(source.recipients, exclusions);
+		source.recipients = filtered.recipients;
+		source.snapshotSha256 = sha256(`${source.snapshotSha256}:${filtered.exclusionsSha256}`);
+		console.info(`Excluded ${filtered.excludedRows} campaign-specific recipient row(s).`);
+	}
+	const respectListSuppressions = templateModule.metadata.audience === "subscribers" || Boolean(rawOptions.respectListSuppressions);
 	const deduplicated = deduplicateRecipients(source.recipients);
 	if (deduplicated.recipients.length > options.renderLimits.maxRecipients) {
 		throw new Error(`Campaign exceeds the ${options.renderLimits.maxRecipients}-recipient limit`);
@@ -171,7 +185,7 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 	console.info("Loading SES bounce and complaint suppressions...");
 	const sesSuppressions = await fetchSesSuppressedEmailSet(ses);
 	let listSuppressions = new Set<string>();
-	if (templateModule.metadata.audience === "subscribers") {
+	if (respectListSuppressions) {
 		console.info("Loading email-list-manager suppressions...");
 		listSuppressions = await fetchListSuppressions(options);
 	}
@@ -264,7 +278,7 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 			state,
 			snapshotSha256: source.snapshotSha256,
 			maxPerSecond: effectiveMaxPerSecond,
-			refreshListSuppressions: templateModule.metadata.audience === "subscribers"
+			refreshListSuppressions: respectListSuppressions
 				? async () => { listSuppressions = await fetchListSuppressions(options); return listSuppressions; }
 				: undefined,
 		});
