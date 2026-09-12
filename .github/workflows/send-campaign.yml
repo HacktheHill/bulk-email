@@ -165,6 +165,7 @@ jobs:
               run: npm ci && npm run verify
 
             - name: Run production-shaped dry run
+              if: ${{ inputs.test_email_to == '' }}
               working-directory: bulk-email
               env:
                   CAMPAIGN_ID: ${{ inputs.campaign_id }}
