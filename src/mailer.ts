@@ -86,28 +86,36 @@ export function createPerSecondRateLimiter(maxPerSecond: number): RateLimiter {
 	};
 }
 
+const RETRYABLE_SES_ERRORS = new Set([
+	"Throttling",
+	"ThrottlingException",
+	"TooManyRequestsException",
+	"ServiceUnavailableException",
+	"InternalServiceError",
+]);
+
 export function isRetryableSesError(error: unknown): boolean {
 	if (!error || typeof error !== "object") return false;
 	const awsError = error as { name?: string; $metadata?: { httpStatusCode?: number } };
 	if ((awsError.$metadata?.httpStatusCode ?? 0) >= 500) return true;
-	return new Set([
-		"Throttling",
-		"ThrottlingException",
-		"TooManyRequestsException",
-		"ServiceUnavailableException",
-		"InternalServiceError",
-	]).has(awsError.name ?? "");
+	return RETRYABLE_SES_ERRORS.has(awsError.name ?? "");
 }
+
+const AMBIGUOUS_SES_NAMES = new Set(["AbortError", "TimeoutError", "RequestTimeout"]);
+const AMBIGUOUS_SES_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]);
 
 export function isAmbiguousSesError(error: unknown): boolean {
 	if (!error || typeof error !== "object") return false;
 	const networkError = error as { name?: unknown; code?: unknown };
-	return new Set(["AbortError", "TimeoutError", "RequestTimeout"]).has(String(networkError.name ?? ""))
-		|| new Set(["ECONNRESET", "ETIMEDOUT", "EPIPE"]).has(String(networkError.code ?? ""));
+	return AMBIGUOUS_SES_NAMES.has(String(networkError.name ?? ""))
+		|| AMBIGUOUS_SES_CODES.has(String(networkError.code ?? ""));
 }
 
+const PLACEHOLDER_REGEX = /\{\{\s*(\w+)\s*\}\}/g;
+
 export function applyPlaceholders(input: string, values: TemplateProps): string {
-	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
+	if (!input.includes("{{")) return input;
+	return input.replaceAll(PLACEHOLDER_REGEX, (_match, key: string) => {
 		const value = values[key];
 		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
 			throw new Error(`Template contains an unresolved placeholder: ${key}`);
