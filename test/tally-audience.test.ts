@@ -24,8 +24,15 @@ test("extracts both applicant email fields but never the guardian email", () => 
 		{ questionId: "fr", answer: " FR@example.com " }, { questionId: "parent", answer: "parent@example.com" },
 	] }] };
 	assert.deepEqual(parseApplicantPage(data).applicants.map(a => a.email), ["fr@example.com"]);
+	const withChoiceAnswer = structuredClone(data) as typeof data & { submissions: Array<{ responses: unknown[] }> };
+	(withChoiceAnswer.submissions[0].responses as unknown[]).push({ questionId: "unrelated", answer: ["option-id"], formattedAnswer: ["A choice"] });
+	assert.deepEqual(parseApplicantPage(withChoiceAnswer).applicants.map(a => a.email), ["fr@example.com"]);
 	data.submissions[0].responses = [{ questionId: "parent", answer: "parent@example.com" }];
 	assert.throws(() => parseApplicantPage(data), /missing an applicant email/);
 	data.submissions[0].isCompleted = false;
 	assert.equal(parseApplicantPage(data).missingEmail, 1);
+	data.submissions[0].responses = [{ questionId: "en", answer: "unfinished@" }];
+	assert.equal(parseApplicantPage(data).missingEmail, 1);
+	data.submissions[0].isCompleted = true;
+	assert.throws(() => parseApplicantPage(data), /Invalid completed applicant email/);
 });
