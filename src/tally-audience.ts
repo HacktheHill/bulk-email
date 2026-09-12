@@ -8,7 +8,7 @@ const pageSchema = z.object({
 	submissions: z.array(z.object({
 		id: z.string(), isCompleted: z.boolean(), submittedAt: z.string(),
 		responses: z.array(z.object({
-			questionId: z.string(), answer: z.unknown(), formattedAnswer: z.string().nullish(),
+			questionId: z.string(), answer: z.unknown(), formattedAnswer: z.unknown().optional(),
 			updatedAt: z.string().optional(),
 		})),
 	})),
@@ -37,7 +37,8 @@ export function parseApplicantPage(data: unknown): { page: number; hasMore: bool
 				if (!Number.isFinite(timestamp)) throw new Error("Invalid Tally response timestamp");
 				updatedAt = Math.max(updatedAt, timestamp);
 			}
-			const value = typeof response.answer === "string" ? response.answer : response.formattedAnswer;
+			const value = typeof response.answer === "string" ? response.answer :
+				typeof response.formattedAnswer === "string" ? response.formattedAnswer : undefined;
 			if (title === "Preferred Language / Langue préférée" && value === "Français") language = "fr";
 			if ((title === "Email address" || title === "Adresse courriel") && value?.trim()) {
 				const email = normalizeEmail(value);
@@ -92,6 +93,8 @@ export async function fetchTallyApplicants(token: string, formId: string): Promi
 			} else if (error instanceof Error && !(error instanceof SyntaxError)) {
 				console.error(error.message);
 			}
+			// Do not attach the original error: schema errors can include applicant data.
+			// eslint-disable-next-line preserve-caught-error
 			throw new Error("Tally returned an unexpected audience schema; no send is permitted");
 		}
 		if (parsed.page !== page || parsed.ids.some(id => seen.has(id))) throw new Error("Tally pagination changed or repeated; retry a fresh preflight");
