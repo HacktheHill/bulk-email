@@ -134,10 +134,10 @@ jobs:
                         if (parsed.applicants.length !== 1 || !applicant?.completed) throw Error();
                         found.add(submission.id);
                         const titles = new Map(data.questions.map((q: { id: string; title: string | null }) => [q.id, q.title?.trim()]));
-                        const names = submission.responses
-                          .filter((r: { questionId: string }) => titles.get(r.questionId) === (applicant.language === 'fr' ? 'Prénom' : 'First name'))
+                        const names = [...new Set(submission.responses
+                          .filter((r: { questionId: string }) => ['First name', 'Prénom'].includes(String(titles.get(r.questionId))))
                           .map((r: { answer: unknown }) => typeof r.answer === 'string' ? r.answer.trim() : '')
-                          .filter(Boolean);
+                          .filter(Boolean))] as string[];
                         let name = names.length === 1 ? names[0] : '';
                         if (name.length > 60 || !/^[\p{L}\p{M}][\p{L}\p{M} '\u2019-]*$/u.test(name) || /^(test|unknown|none|null|n\/a)$/i.test(name)) name = '';
                         const previous = recipients.get(applicant.email);
