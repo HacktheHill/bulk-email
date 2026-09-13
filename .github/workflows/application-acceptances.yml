@@ -1,0 +1,192 @@
+name: Application acceptances
+run-name: acceptance-2026-09-13-${{ (inputs.execute_send || github.event_name == 'schedule') && 'send' || 'preview' }}
+
+on:
+    pull_request:
+        paths:
+            - .github/workflows/application-acceptances.yml
+    workflow_dispatch:
+        inputs:
+            execute_send:
+                description: Send the reviewed acceptance wave after preflight
+                type: boolean
+                default: false
+            send_test:
+                description: Send a personalised test to Daniel only
+                type: boolean
+                default: false
+    schedule:
+        - cron: "0 15 13 9 *"
+
+permissions:
+    contents: read
+    actions: read
+
+concurrency:
+    group: hth3-accepted-2026-09-13
+    cancel-in-progress: false
+
+jobs:
+    acceptance:
+        runs-on: ubuntu-latest
+        environment: production
+        timeout-minutes: 30
+        env:
+            SEND: ${{ (inputs.execute_send || github.event_name == 'schedule') && 'true' || 'false' }}
+            SEND_TEST: ${{ inputs.send_test && 'true' || 'false' }}
+            APPROVED_TEMPLATE: ${{ vars.HTH3_ACCEPTANCES_APPROVED_TEMPLATE }}
+            TEMPLATE_REF: 3cf7b19abb9db4f652d50c285856fb5c8dffe397
+            AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+            AWS_REGION: ${{ secrets.AWS_REGION }}
+            EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+            EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
+            EMAIL_REPLY_TO: ${{ secrets.EMAIL_REPLY_TO }}
+            SES_CONFIGURATION_SET: ${{ secrets.SES_CONFIGURATION_SET }}
+        steps:
+            - name: Enforce approval, date and single-attempt guard
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  node --input-type=module <<'JS'
+                  if (process.env.SEND === 'true' && process.env.SEND_TEST === 'true') throw Error('Test and campaign send are mutually exclusive');
+                  if (process.env.SEND !== 'true') process.exit(0);
+                  const e = process.env;
+                  const now = new Date();
+                  if (e.APPROVED_TEMPLATE !== e.TEMPLATE_REF) throw Error('The exact test template must be approved before sending');
+                  if (e.GITHUB_REF !== 'refs/heads/main' || e.GITHUB_RUN_ATTEMPT !== '1') throw Error('Only a first attempt on main may send');
+                  if (now.toISOString().slice(0,10) !== '2026-09-13' || now.getUTCHours() < 15) throw Error('Send is permitted only on September 13, 2026 at or after 11 a.m. Toronto time');
+                  let complete = false;
+                  for (let page = 1; page <= 100; page++) {
+                    const res = await fetch(`https://api.github.com/repos/${e.GITHUB_REPOSITORY}/actions/workflows/application-acceptances.yml/runs?per_page=100&page=${page}`, {
+                      headers: { Authorization: `Bearer ${e.GH_TOKEN}`, Accept: 'application/vnd.github+json' },
+                      redirect: 'error', signal: AbortSignal.timeout(30000)
+                    });
+                    if (!res.ok) throw Error('Could not verify previous campaign attempts');
+                    const data = await res.json();
+                    if (!Array.isArray(data.workflow_runs)) throw Error('Unexpected workflow history');
+                    if (data.workflow_runs.some(r => String(r.id) !== e.GITHUB_RUN_ID && r.display_title === 'acceptance-2026-09-13-send')) throw Error('A prior send attempt exists; reconcile its SES results before any retry');
+                    if (data.workflow_runs.length < 100) { complete = true; break; }
+                  }
+                  if (!complete) throw Error('Workflow history exceeded the safety limit');
+                  JS
+
+            - uses: actions/checkout@v7
+              with:
+                  repository: HacktheHill/bulk-email
+                  ref: 59c61e08b97c42c7b4b583a5630d29bc6c6cfff4
+                  path: bulk-email
+            - uses: actions/checkout@v7
+              with:
+                  repository: HacktheHill/react-email-templates
+                  ref: ${{ env.TEMPLATE_REF }}
+                  token: ${{ secrets.TEMPLATES_REPO_TOKEN }}
+                  path: react-email-templates
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: "22.x"
+                  cache: npm
+                  cache-dependency-path: bulk-email/package-lock.json
+            - name: Verify CLI
+              working-directory: bulk-email
+              run: npm ci && npm run verify
+            - name: Verify templates
+              working-directory: react-email-templates
+              run: npm ci && npm run verify
+
+            - name: Resolve only the reviewed accepted submissions
+              working-directory: bulk-email
+              env:
+                  TALLY_API_KEY: ${{ secrets.TALLY_API_KEY }}
+                  ACCEPTED_IDS: ${{ secrets.HTH3_ACCEPTED_SUBMISSION_IDS_20260913 }}
+              run: |
+                  cat > .acceptance-audience.ts <<'TS'
+                  import { createHash } from 'node:crypto';
+                  import { mkdir, writeFile } from 'node:fs/promises';
+                  import { parseApplicantPage } from './src/tally-audience.ts';
+
+                  async function prepare() {
+                    const ids: unknown = JSON.parse(process.env.ACCEPTED_IDS ?? 'null');
+                    if (!Array.isArray(ids) || ids.length !== 403 || ids.some(id => typeof id !== 'string' || !/^[A-Za-z0-9]+$/.test(id)) || new Set(ids).size !== 403) throw Error();
+                    if (!process.env.TALLY_API_KEY) throw Error();
+                    const selected = new Set(ids as string[]);
+                    const found = new Set<string>();
+                    const seen = new Set<string>();
+                    const recipients = new Map<string, { language: string; name: string }>();
+                    let complete = false;
+                    for (let page = 1; page <= 100; page++) {
+                      const res = await fetch(`https://api.tally.so/forms/9qga9Q/submissions?filter=all&limit=100&page=${page}`, {
+                        headers: { Authorization: `Bearer ${process.env.TALLY_API_KEY}` },
+                        redirect: 'error', signal: AbortSignal.timeout(30000)
+                      });
+                      if (!res.ok) throw Error();
+                      const body = await res.text();
+                      if (Buffer.byteLength(body) > 10 * 1024 * 1024) throw Error();
+                      const data = JSON.parse(body);
+                      if (data.page !== page || typeof data.hasMore !== 'boolean' || !Array.isArray(data.submissions)) throw Error();
+                      for (const submission of data.submissions) {
+                        if (typeof submission.id !== 'string' || seen.has(submission.id)) throw Error();
+                        seen.add(submission.id);
+                        if (!selected.has(submission.id)) continue;
+                        const parsed = parseApplicantPage({ ...data, submissions: [submission] });
+                        const applicant = parsed.applicants[0];
+                        if (parsed.applicants.length !== 1 || !applicant?.completed) throw Error();
+                        found.add(submission.id);
+                        const titles = new Map(data.questions.map((q: { id: string; title: string | null }) => [q.id, q.title?.trim()]));
+                        const names = submission.responses
+                          .filter((r: { questionId: string }) => titles.get(r.questionId) === (applicant.language === 'fr' ? 'Prénom' : 'First name'))
+                          .map((r: { answer: unknown }) => typeof r.answer === 'string' ? r.answer.trim() : '')
+                          .filter(Boolean);
+                        let name = names.length === 1 ? names[0] : '';
+                        if (name.length > 60 || !/^[\p{L}\p{M}][\p{L}\p{M} '\u2019-]*$/u.test(name) || /^(test|unknown|none|null|n\/a)$/i.test(name)) name = '';
+                        const previous = recipients.get(applicant.email);
+                        if (previous && previous.name !== name) name = '';
+                        recipients.set(applicant.email, { language: applicant.language, name });
+                      }
+                      if (!data.hasMore) { complete = true; break; }
+                      if (data.submissions.length === 0) throw Error();
+                    }
+                    if (!complete || found.size !== 403 || recipients.size !== 400) throw Error();
+                    const emails = [...recipients.keys()].sort();
+                    const hash = createHash('sha256').update(emails.join('\n') + '\n').digest('hex');
+                    if (hash !== 'dc719499319bd13104c3f465707f0a2ae09058afb0e5ff4a0f7d2cf8f6162ef1') throw Error();
+                    for (const email of emails) console.log(`::add-mask::${email}`);
+                    const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+                    const csv = 'email,language,name\n' + emails.map(email => `${quote(email)},${recipients.get(email)!.language},${quote(recipients.get(email)!.name)}`).join('\n') + '\n';
+                    await mkdir('.bulk-email/audiences', { recursive: true, mode: 0o700 });
+                    await writeFile('.bulk-email/audiences/accepted.csv', csv, { mode: 0o600 });
+                    console.log('Verified 403 reviewed submissions resolving to exactly 400 unique accepted recipients.');
+                    console.log(`First-name greetings: ${[...recipients.values()].filter(r => r.name).length}; neutral fallbacks: ${[...recipients.values()].filter(r => !r.name).length}.`);
+                  }
+                  try { await prepare(); }
+                  catch { console.error('Accepted audience verification failed; no send is permitted. Review private source data.'); process.exitCode = 1; }
+                  TS
+                  node --import tsx .acceptance-audience.ts
+
+            - name: Preflight the exact accepted audience
+              working-directory: bulk-email
+              run: |
+                  npm start -- send --campaign-id hth3-accepted-2026-09-13 \
+                    --file .bulk-email/audiences/accepted.csv \
+                    --template-dir ../react-email-templates/emails/hackthehill \
+                    --template application-accepted.tsx \
+                    --purpose "Application acceptance notices for reviewed Hack the Hill III applicants" --dry-run
+            - name: Send the approved acceptance wave
+              if: ${{ env.SEND == 'true' }}
+              working-directory: bulk-email
+              run: |
+                  npm start -- send --campaign-id hth3-accepted-2026-09-13 \
+                    --file .bulk-email/audiences/accepted.csv \
+                    --template-dir ../react-email-templates/emails/hackthehill \
+                    --template application-accepted.tsx \
+                    --purpose "Application acceptance notices for reviewed Hack the Hill III applicants" --yes
+            - name: Send personalised test to Daniel
+              if: ${{ env.SEND_TEST == 'true' }}
+              working-directory: bulk-email
+              run: |
+                  printf 'email,language,name\ndaniel.thorp@ctn-rtc.org,en,Daniel\n' > .bulk-email/audiences/test.csv
+                  npm start -- test --to daniel.thorp@ctn-rtc.org \
+                    --file .bulk-email/audiences/test.csv \
+                    --template-dir ../react-email-templates/emails/hackthehill \
+                    --template application-accepted.tsx
