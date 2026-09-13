@@ -12,8 +12,6 @@ on:
         type: boolean
         default: false
         description: Send after the test emails and campaign have been approved
-  schedule:
-    - cron: '0 22 13 9 *'
 
 permissions:
   contents: read
