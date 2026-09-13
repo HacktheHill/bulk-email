@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { confirmCampaignSend } from "./confirmation.js";
+import { emailSetDigest, verifyAudience } from "./campaign-audience.js";
 import { excludeCampaignRecipients } from "./campaign-exclusions.js";
 import { processWithConcurrency } from "./concurrency.js";
 import { fetchCsvSnapshot, fetchSuppressedEmailSet } from "./list-service.js";
@@ -57,6 +58,8 @@ addCommonOptions(program.command("send", { isDefault: true }))
 	.option("--purpose <purpose>", "Required non-promotional event/service purpose for provided-CSV templates")
 	.option("--exclude-file <file>", "CSV of applicant addresses to exclude from this campaign")
 	.option("--respect-list-suppressions", "Also apply email-list-manager suppressions to a provided-CSV campaign")
+	.option("--expected-recipients <count>", "Require this exact unique recipient count before suppression", Number)
+	.option("--expected-email-set-sha256 <digest>", "Require this exact normalized email-set digest")
 	.option("--state-dir <stateDir>", "Campaign state root", ".bulk-email/campaigns")
 	.option("--dry-run", "Validate and summarize without sending")
 	.option("--yes", "Skip the final confirmation prompt")
@@ -164,6 +167,13 @@ async function runSend(rawOptions: OptionValues): Promise<void> {
 	}
 	const respectListSuppressions = templateModule.metadata.audience === "subscribers" || Boolean(rawOptions.respectListSuppressions);
 	const deduplicated = deduplicateRecipients(source.recipients);
+	if (rawOptions.expectedRecipients !== undefined || rawOptions.expectedEmailSetSha256 !== undefined) {
+		const expected = z.object({ recipients: z.number().int().positive(), emailSetSha256: z.string().regex(/^[a-f0-9]{64}$/) })
+			.safeParse({ recipients: rawOptions.expectedRecipients, emailSetSha256: rawOptions.expectedEmailSetSha256 });
+		if (!expected.success) throw new Error("Both expected audience options must be valid");
+		verifyAudience(deduplicated.recipients, expected.data);
+	}
+	console.info(`Email-set SHA256: ${emailSetDigest(deduplicated.recipients)}`);
 	if (deduplicated.recipients.length > options.renderLimits.maxRecipients) {
 		throw new Error(`Campaign exceeds the ${options.renderLimits.maxRecipients}-recipient limit`);
 	}

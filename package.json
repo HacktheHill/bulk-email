@@ -25,6 +25,7 @@
 	"type": "module",
 	"scripts": {
 		"start": "tsx src/app.ts",
+		"campaign": "tsx src/campaign-runner.ts",
 		"build": "tsc",
 		"test": "tsx --test test/*.test.ts test/*.test.tsx",
 		"typecheck": "tsc --noEmit",

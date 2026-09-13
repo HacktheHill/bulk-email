@@ -25,7 +25,8 @@ test("stores private recipient digests and loads strict campaign resume state", 
 			recipientSnapshotSha256: "a".repeat(64),
 		});
 		assert.deepEqual(await loadAcceptedRecipientDigests(state.acceptedFile, "campaign-a"), new Set([recipientDigest("alice@example.com")]));
-		assert.equal((await stat(state.acceptedFile)).mode & 0o777, 0o600);
+		// Windows reports ACL-backed files differently; production CI verifies POSIX permissions.
+		if (process.platform !== "win32") assert.equal((await stat(state.acceptedFile)).mode & 0o777, 0o600);
 		assert.doesNotMatch(await (await import("node:fs/promises")).readFile(state.acceptedFile, "utf8"), /alice@/i);
 	} finally {
 		await rm(directory, { recursive: true, force: true });

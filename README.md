@@ -88,7 +88,9 @@ The package is private and is not published to npm.
 
 ## GitHub Actions Scheduling
 
-`.github/workflows/send-campaign.yml` is reusable through `workflow_call` and can also be started manually with `workflow_dispatch`. It always runs the full dry-run preflight. The irreversible send is opt-in through the `execute_send` input and runs in the protected `production` environment.
+Use the **Campaigns** workflow for repeated campaign operations. It has three modes: `preview`, `test`, and `send`. A single scheduler checks the queue every 15 minutes; adding a campaign requires configuration, not another workflow or code commit. See [Campaign configuration and operation](docs/campaigns.md).
+
+The queue contains only campaign IDs, secret names, configuration digests, approval digests, and send windows. Private recipient data stays in an encrypted Actions secret for each campaign. Template metadata still controls subscriber versus service-message policy, and the existing CLI still owns rendering, SES preflight, suppression and delivery.
 
 Configure these repository or environment secrets before using it:
 
@@ -112,27 +114,6 @@ UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID
 UNSUBSCRIBE_TOKEN_KEYS
 ```
 
-Set `TEMPLATES_REPO_TOKEN` to a read-only token that can check out `HacktheHill/react-email-templates`. Configure required reviewers on the GitHub `production` environment so a scheduled run cannot send without an approval.
+Set `TEMPLATES_REPO_TOKEN` to a read-only token that can check out `HacktheHill/react-email-templates`. The `production` environment remains available for additional human approval requirements. `TALLY_API_KEY` is needed only for reviewed Tally audiences.
 
-A scheduling workflow can call this reusable workflow after the campaign date and time are approved:
-
-```yaml
-name: Schedule Save-the-Date
-
-on:
-  schedule:
-    - cron: "0 17 * * 2" # 1:00 PM Eastern during daylight time; use 18 UTC during standard time
-
-jobs:
-  send:
-    uses: HacktheHill/bulk-email/.github/workflows/send-campaign.yml@main
-    with:
-      bulk_email_ref: main
-      campaign_id: hth-save-the-date-2026
-      template: save-the-date.tsx
-      template_ref: main
-      execute_send: true
-    secrets: inherit
-```
-
-GitHub Actions cron uses UTC and may start late under platform load. Use a fixed UTC schedule based on the approved date and Eastern daylight/standard-time conversion, or schedule a separate workflow for a single date. The reusable workflow is deliberately not scheduled by this repository yet.
+The older `send-campaign.yml` remains compatible with existing callers and one-off tests, including an optional `test_name`. It does not use the configured-campaign ledger; do not use it to resend a campaign managed by **Campaigns**.

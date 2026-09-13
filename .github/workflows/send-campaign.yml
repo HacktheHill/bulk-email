@@ -32,6 +32,11 @@ on:
                 required: false
                 default: ""
                 type: string
+            test_name:
+                description: "Optional first name for the test greeting"
+                required: false
+                default: ""
+                type: string
         secrets:
             BULK_EMAIL_REPO_TOKEN:
                 required: false
@@ -95,6 +100,11 @@ on:
                 type: boolean
             test_email_to:
                 description: "Send one test email instead of the campaign"
+                required: false
+                default: ""
+                type: string
+            test_name:
+                description: "Optional first name for the test greeting"
                 required: false
                 default: ""
                 type: string
@@ -221,6 +231,7 @@ jobs:
               env:
                   EXECUTE_SEND: ${{ inputs.execute_send }}
                   TEST_EMAIL_TO: ${{ inputs.test_email_to }}
+                  TEST_NAME: ${{ inputs.test_name }}
                   CAMPAIGN_ID: ${{ inputs.campaign_id }}
                   TEMPLATE: ${{ inputs.template }}
               run: |
@@ -229,7 +240,12 @@ jobs:
                       echo "test_email_to and execute_send are mutually exclusive" >&2
                       exit 1
                     fi
-                    npm run start -- test --to "$TEST_EMAIL_TO" \
+                    node --input-type=module <<'JS'
+                  import { writeFileSync } from 'node:fs';
+                  const quote = value => '"' + value.replaceAll('"', '""') + '"';
+                  writeFileSync('.test-recipient.csv', 'email,language,name\n' + [quote(process.env.TEST_EMAIL_TO), 'en', quote(process.env.TEST_NAME || '')].join(',') + '\n', { mode: 0o600 });
+                  JS
+                    npm run start -- test --to "$TEST_EMAIL_TO" --file .test-recipient.csv \
                       --template-dir ../react-email-templates/emails/hackthehill \
                       --template "$TEMPLATE"
                   else

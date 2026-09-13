@@ -1,0 +1,125 @@
+name: Campaigns
+run-name: Campaigns - ${{ inputs.campaign_id || 'scheduled' }} - ${{ inputs.mode || 'send' }}
+
+on:
+    workflow_dispatch:
+        inputs:
+            campaign_id:
+                description: Campaign ID in CAMPAIGN_QUEUE
+                type: string
+                required: true
+            mode:
+                description: Preview, send a test, or send the approved campaign
+                type: choice
+                options: [preview, test, send]
+                default: preview
+                required: true
+    schedule:
+        - cron: "*/15 * * * *"
+
+permissions:
+    contents: read
+
+jobs:
+    plan:
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        outputs:
+            matrix: ${{ steps.plan.outputs.matrix }}
+            has_work: ${{ steps.plan.outputs.has_work }}
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: "24.x"
+            - id: plan
+              name: Select due or requested campaigns
+              env:
+                  CAMPAIGN_QUEUE: ${{ vars.CAMPAIGN_QUEUE || '[]' }}
+                  CAMPAIGN_MODE: ${{ inputs.mode || 'schedule' }}
+                  CAMPAIGN_ID: ${{ inputs.campaign_id }}
+                  GH_TOKEN: ${{ github.token }}
+              run: node src/campaign-plan.ts
+
+    campaign:
+        needs: plan
+        if: ${{ needs.plan.outputs.has_work == 'true' }}
+        strategy:
+            fail-fast: false
+            matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+        name: ${{ matrix.id }}
+        runs-on: ubuntu-latest
+        timeout-minutes: 45
+        environment: production
+        concurrency:
+            group: campaign-${{ matrix.id }}
+            cancel-in-progress: false
+        permissions:
+            contents: write # Atomically create a permanent send-attempt tag; never rewrite one.
+        defaults:
+            run:
+                working-directory: bulk-email
+        env:
+            CAMPAIGN_CONFIG: ${{ secrets[matrix.configSecret] }}
+            CAMPAIGN_ENTRY: ${{ toJSON(matrix) }}
+            CAMPAIGN_MODE: ${{ inputs.mode || 'schedule' }}
+            AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+            AWS_REGION: ${{ secrets.AWS_REGION }}
+            EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+            EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
+            EMAIL_REPLY_TO: ${{ secrets.EMAIL_REPLY_TO }}
+            SES_CONFIGURATION_SET: ${{ secrets.SES_CONFIGURATION_SET }}
+            TALLY_API_KEY: ${{ secrets.TALLY_API_KEY }}
+            SUBSCRIBER_EXPORT_URL: ${{ secrets.SUBSCRIBER_EXPORT_URL }}
+            SUBSCRIBER_EXPORT_TOKEN: ${{ secrets.SUBSCRIBER_EXPORT_TOKEN }}
+            SUPPRESSION_CHECK_URL: ${{ secrets.SUPPRESSION_CHECK_URL }}
+            SUPPRESSION_CHECK_TOKEN: ${{ secrets.SUPPRESSION_CHECK_TOKEN }}
+            UNSUBSCRIBE_BASE_URL: ${{ secrets.UNSUBSCRIBE_BASE_URL }}
+            UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID: ${{ secrets.UNSUBSCRIBE_TOKEN_ACTIVE_KEY_ID }}
+            UNSUBSCRIBE_TOKEN_KEYS: ${{ secrets.UNSUBSCRIBE_TOKEN_KEYS }}
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  path: bulk-email
+                  persist-credentials: false
+            - uses: actions/setup-node@v7
+              with:
+                  node-version: "24.x"
+                  cache: npm
+                  cache-dependency-path: bulk-email/package-lock.json
+            - name: Install and verify the CLI
+              run: npm ci && npm run verify
+            - id: config
+              name: Validate private configuration and approval
+              run: npm run campaign -- inspect
+            - uses: actions/checkout@v7
+              with:
+                  repository: HacktheHill/react-email-templates
+                  ref: ${{ steps.config.outputs.template_ref }}
+                  token: ${{ secrets.TEMPLATES_REPO_TOKEN }}
+                  path: react-email-templates
+                  persist-credentials: false
+            - name: Verify the pinned template
+              working-directory: react-email-templates
+              run: npm ci && npm run verify
+            - id: run
+              name: Preflight and execute the selected mode
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: npm run campaign -- run
+            - name: Encrypt reconciliation checkpoint
+              if: ${{ always() && steps.run.outputs.claimed == 'true' }}
+              run: npm run campaign -- checkpoint
+            - name: Retain only the encrypted checkpoint
+              if: ${{ always() && steps.run.outputs.claimed == 'true' }}
+              uses: actions/upload-artifact@v7
+              with:
+                  name: campaign-${{ matrix.id }}-${{ github.run_id }}
+                  path: bulk-email/.bulk-email/checkpoint.enc
+                  include-hidden-files: true
+                  if-no-files-found: error
+                  retention-days: 90

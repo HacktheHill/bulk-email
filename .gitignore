@@ -8,3 +8,5 @@ templates/
 .bulk-email/
 .eslintcache
 *.log
+campaigns.private/
+*.campaign.json
