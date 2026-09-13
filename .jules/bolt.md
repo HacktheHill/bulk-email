@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-09-13 - Fast-Path Regex Checks
+**Learning:** Running regex tests on large strings (like rendered HTML templates) inside massive loops (like iterating over all campaign recipients) creates a significant CPU bottleneck.
+**Action:** Always extract regex objects to the module scope to avoid recompilation, and use fast O(n) string checks like `String.prototype.includes` to bypass the regex entirely when the string lacks the required prefix or character sequence (e.g., bypassing `{{...}}` placeholder regexes with `.includes("{{")`).
