@@ -10,6 +10,6 @@
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
 
-## 2024-05-18 - Fast-path string operations
-**Learning:** Executing Regex on large HTML/text email templates per-recipient blocks the main thread and drastically slows down loop execution during bulk campaigns.
-**Action:** Always extract Regex instances to the module scope and use highly-optimized O(N) short-circuits like `String.prototype.includes` before executing heavier Regex operations on large strings.
+## 2024-05-18 - String fast-paths vs Regex Literal Prefixes
+**Learning:** Adding a `.includes()` scan before a Regex is not always a performance win. If the Regex has a distinct literal prefix (like `/\{\{/`) and no backtracking hazard, the V8 JavaScript engine automatically prefix-scans it. In such cases, an extra `.includes()` check simply results in an unnecessary second scan of the same string, degrading performance.
+**Action:** Do not manually add string fast-paths (like `.includes()`) in front of Regexes that already start with a clear literal prefix. Only apply fast-paths to complex Regexes that lack a literal prefix or present potential backtracking hazards.
