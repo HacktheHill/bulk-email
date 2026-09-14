@@ -79,10 +79,7 @@ export function validateRenderedMessage(input: {
 	if (!input.html.trim() || !input.text.trim()) {
 		throw new Error("Template rendered an empty message body; refusing to send");
 	}
-	if (
-		(input.html.includes("{{") && UNRESOLVED_PLACEHOLDER_REGEX.test(input.html)) ||
-		(input.text.includes("{{") && UNRESOLVED_PLACEHOLDER_REGEX.test(input.text))
-	) {
+	if (UNRESOLVED_PLACEHOLDER_REGEX.test(input.html) || UNRESOLVED_PLACEHOLDER_REGEX.test(input.text)) {
 		throw new Error("Template contains unresolved placeholders");
 	}
 	if (input.metadata.audience === "subscribers") {

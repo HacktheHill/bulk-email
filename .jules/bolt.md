@@ -10,6 +10,6 @@
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
 
-## 2024-09-13 - Fast-Path Regex Checks
-**Learning:** Running regex tests on large strings (like rendered HTML templates) inside massive loops (like iterating over all campaign recipients) creates a significant CPU bottleneck.
-**Action:** Always extract regex objects to the module scope to avoid recompilation, and use fast O(n) string checks like `String.prototype.includes` to bypass the regex entirely when the string lacks the required prefix or character sequence (e.g., bypassing `{{...}}` placeholder regexes with `.includes("{{")`).
+## 2024-09-13 - V8 Regex Prefix Scanning
+**Learning:** V8 natively optimizes regexes that start with literal prefixes (e.g., `/\{\{.../`) by performing a fast prefix scan automatically. Adding a manual `.includes()` check before such a regex is an anti-pattern, as it forces the engine to scan the string twice without saving any time.
+**Action:** Do not manually add fast-path string checks (`.includes()` or `.indexOf()`) in front of regexes that begin with literal character sequences, as this has no performance benefit and adds a backtracking hazard. Rely on V8's native regex engine for prefix scanning.
