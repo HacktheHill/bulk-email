@@ -10,6 +10,6 @@
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
 
-## 2024-05-18 - Fast-path string checks before Regex in loops
-**Learning:** Evaluating Regexes (even compiled ones) on large strings like rendered email HTML bodies is computationally expensive when executed inside a loop for thousands of recipients. Recompiling them on every iteration compounds the issue.
-**Action:** Always extract Regexes outside of functions or loops to compile them once. Use fast-path string checks (like `String.prototype.includes`) to completely bypass the expensive Regex evaluation whenever possible.
+## 2024-05-18 - Avoid redundant string scans before prefix-literal regexes
+**Learning:** Adding a fast-path string check (like `.includes('{{')`) before a regex that already starts with a literal prefix (like `/\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/`) does not save performance. V8 already prefix-scans these regexes, so an explicit string scan just adds a redundant pass over the same string.
+**Action:** When a regex has a clear literal prefix and no backtracking hazard, rely on the JavaScript engine's native optimization instead of adding a manual pre-scan with string methods.
