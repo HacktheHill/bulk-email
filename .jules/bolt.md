@@ -13,3 +13,7 @@
 ## 2024-05-18 - Fast-path Regex Execution
 **Learning:** Checking a regular expression against a large string (like a fully rendered HTML email template) is slow, especially when it's checking for a substring pattern like unresolved `{{placeholder}}`s. V8's regex engine is significantly slower than its highly optimized basic string operations.
 **Action:** Always short-circuit expensive regex lookups using a fast-path string inclusion check (e.g. `.includes("{{")`) when you expect the string will usually not contain the pattern (which is the case for a template where all placeholders have resolved). Extract regexes to module scope to avoid re-compiling the regex object in loops.
+
+## 2024-05-18 - Rejected Regex Optimization (V8 Prefix Scanning)
+**Learning:** Adding a fast-path `.includes("{{")` string scan before a regex like `/\{\{\s*[A-Za-z].../` does not improve performance because the V8 engine already prefix-scans regexes that start with literals and have no backtracking hazards. The extra `.includes()` check acts as a redundant second pass over the string.
+**Action:** Do not attempt to short-circuit regex execution with string inclusion checks if the regex already begins with a simple, fixed literal prefix, as the engine's built-in optimization is already equivalent or better.
