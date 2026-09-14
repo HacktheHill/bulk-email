@@ -10,6 +10,6 @@
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
 
-## 2024-05-18 - Early Substring Check for Regex
-**Learning:** Checking for a fast `String.prototype.includes("...")` before executing a complex regular expression that specifically requires that substring can bypass heavy regex execution. Especially relevant for large text bodies (e.g. 256KB HTML payloads).
-**Action:** When running regex validation on large strings where the regex involves searching for a specific substring like `{{`, add an `includes()` fast path to avoid regex execution if the substring isn't present.
+## 2024-05-18 - Avoid Redundant Regex Prefix Scans
+**Learning:** V8 automatically performs literal prefix scanning for regular expressions that start with a literal string (like `/\{\{.../`). Adding a manual `.includes()` check before such a regex is redundant and can actually be slower by performing a second scan of the same string.
+**Action:** Do not use `.includes()` as a fast path for regular expressions that already start with a specific literal sequence and lack backtracking hazards, as the engine optimizes this natively.
