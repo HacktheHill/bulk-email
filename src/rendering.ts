@@ -6,8 +6,6 @@ import { applyPlaceholders } from "./mailer.js";
 import type { EmailTemplateMetadata, TemplateModule } from "./template.js";
 import { validateRequiredFields } from "./template.js";
 
-const PLACEHOLDER_REGEX = /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/;
-
 export type RenderLimits = {
 	maxRecipients: number;
 	maxHtmlBytes: number;
@@ -79,8 +77,7 @@ export function validateRenderedMessage(input: {
 	if (!input.html.trim() || !input.text.trim()) {
 		throw new Error("Template rendered an empty message body; refusing to send");
 	}
-	// Fast-path: check for "{{" using string inclusion before evaluating the expensive regex
-	if ((input.html.includes("{{") && PLACEHOLDER_REGEX.test(input.html)) || (input.text.includes("{{") && PLACEHOLDER_REGEX.test(input.text))) {
+	if (/\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.html) || /\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/.test(input.text)) {
 		throw new Error("Template contains unresolved placeholders");
 	}
 	if (input.metadata.audience === "subscribers") {
