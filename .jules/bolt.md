@@ -9,7 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
-## 2024-05-18 - Fast-path string checks before Regex
+## 2024-05-18 - Redundant Regex Prefix Scanning
 
-**Learning:** Running complex Regex on large strings (like rendered emails) inside a loop is very expensive and can cause performance bottlenecks.
-**Action:** When performing potentially expensive operations (like Regex matching) within loops, use fast-path string checks (like String.prototype.includes) to bypass the expensive operation whenever possible. Extract regex declarations outside of the function to avoid recompilation overhead.
+**Learning:** Adding a `.includes("prefix")` fast-path check before a regular expression is unnecessary and potentially slower if the regex already starts with a literal string prefix (e.g., `/prefix.../`) and has no backtracking hazards. V8 engines automatically perform a prefix scan for such regex patterns natively.
+**Action:** Do not manually add fast-path string prefix scans (like `.includes()`) before regular expressions that already start with a static string literal. Rely on the engine's native regex optimization to avoid scanning the string twice.
