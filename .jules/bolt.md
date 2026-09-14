@@ -12,3 +12,6 @@
 ## 2023-09-05 - Fast-Path Regex Check for Placeholders
 **Learning:** Using regex inside a loop (like iterating through rendered emails) to check for a simple character combination can be extremely slow, particularly if the string size is large.
 **Action:** Extract stateless regex to a module-level constant. Guard the regex evaluation with a native fast-path `.includes()` check that acts as a cheap precondition to avoid calling the regex engine unless necessary.
+## 2023-09-05 - Fast-Path Regex Check vs V8 Optimization
+**Learning:** V8 engine is highly optimized and automatically performs prefix-scans for regular expressions that start with a literal string and have no backtracking hazards (e.g., `/\{\{\s*[A-Za-z][A-Za-z0-9_.]*\s*\}\}/`). Adding a manual fast-path check like `.includes("{{")` before such a regex actually degrades performance by adding a redundant second scan of the string.
+**Action:** Do not manually add fast-path substring checks before regular expressions that have a literal prefix and no backtracking hazard, as modern JS engines (like V8) already optimize these cases.
