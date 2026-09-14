@@ -10,6 +10,6 @@
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
 
-## 2024-05-30 - Optimize Expensive Regex Validation
-**Learning:** Recompiling a regex pattern and blindly testing it against large HTML/text blocks for every rendered recipient adds overhead.
-**Action:** Extract regex patterns to module scope and gate execution behind fast `String.prototype.includes` checks when verifying templates.
+## 2025-02-14 - Regex Literal Prefix Scanning
+**Learning:** Adding a `String.prototype.includes` check before a regex that starts with a literal (e.g., `/\{\{\.../`) is redundant. V8 automatically optimizes and prefix-scans for literals, so an explicit `.includes` just adds a second unnecessary scan over the string.
+**Action:** Do not use `.includes` as a fast path for regexes that already start with literal strings, as the JavaScript engine handles this efficiently.
