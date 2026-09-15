@@ -49,7 +49,7 @@ jobs:
       UNSUBSCRIBE_TOKEN_KEYS: ${{ secrets.UNSUBSCRIBE_TOKEN_KEYS }}
     steps:
       - name: Require approval and prevent duplicate send attempts
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             if (context.eventName === 'schedule' && new Date().toISOString().slice(0, 10) !== '2026-09-13') {
