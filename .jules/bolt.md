@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-09-17 - Extract Regex declarations to module scope
+**Learning:** Regular expressions defined inside functions that are called in tight loops (like per-recipient rendering) are recompiled on every invocation, adding unnecessary CPU overhead.
+**Action:** Always extract regex declarations to the module scope so they are compiled exactly once.
