@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-09-18 - Early exit batch loop array filters
+**Learning:** Instantiating `new Set<string>()` and filtering over it in batch loops causes needless per-item processing overhead (like string normalisation).
+**Action:** Always conditionally bypass array map/filter callbacks for empty state objects, saving loop operations and string allocation.
