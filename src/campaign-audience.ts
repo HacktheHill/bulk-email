@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { CampaignConfig } from "./campaign-config.js";
 import { readRecipientCsvText, type RecipientRecord } from "./recipients.js";
 import { readResponseTextWithLimit } from "./list-service.js";
-import { parseApplicantPage } from "./tally-audience.js";
+import { buildReminderAudiences, parseApplicantPage, type Applicant } from "./tally-audience.js";
 
 const pageSchema = z.object({
 	page: z.number().int().positive(), hasMore: z.boolean(),
@@ -37,13 +37,40 @@ export function recipientCsv(rows: RecipientRecord[]): string {
 	return [keys.map(quote).join(","), ...rows.map(row => keys.map(key => quote(row[key])).join(","))].join("\n") + "\n";
 }
 
-export async function resolveAudience(source: CampaignConfig["audience"], token: string, request = fetch): Promise<RecipientRecord[] | undefined> {
+export async function resolveAudience(source: CampaignConfig["audience"], token: string, request = fetch, now = Date.now()): Promise<RecipientRecord[] | undefined> {
 	if (source.type === "subscribers") return undefined; // The CLI owns the live export and marketing suppression policy.
 	if (source.type === "csv") {
 		const csv = source.encoding === "gzip-base64" ? gunzipSync(Buffer.from(source.data, "base64"), { maxOutputLength: 25 * 1024 * 1024 }).toString("utf8") : source.data;
 		return readRecipientCsvText(csv);
 	}
-	if (!token) throw new Error("TALLY_API_KEY is required for a reviewed Tally audience");
+	if (!token) throw new Error("TALLY_API_KEY is required for a Tally audience");
+	if (source.type === "tally-incomplete") {
+		const applicants: Applicant[] = [];
+		const seen = new Set<string>();
+		try {
+			for (let page = 1; page <= 100; page++) {
+				const response = await request(`https://api.tally.so/forms/${source.formId}/submissions?filter=all&limit=100&page=${page}`, {
+					headers: { Authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(30_000),
+				});
+				if (!response.ok) throw new Error();
+				const data = pageSchema.parse(JSON.parse(await readResponseTextWithLimit(response, 10 * 1024 * 1024)));
+				if (data.page !== page) throw new Error();
+				const parsed = parseApplicantPage(data);
+				if (parsed.ids.some(id => seen.has(id))) throw new Error();
+				for (const id of parsed.ids) seen.add(id);
+				applicants.push(...parsed.applicants);
+				if (!data.hasMore) {
+					if (seen.size === 0) throw new Error();
+					return buildReminderAudiences(applicants, now, source.inactiveHours).incomplete
+						.map(({ email, language }) => ({ email, language, name: "" }));
+				}
+				if (data.submissions.length === 0) throw new Error();
+			}
+			throw new Error();
+		} catch {
+			throw new Error("Incomplete Tally audience could not be verified; inspect the private source records before sending");
+		}
+	}
 	const selected = new Set(source.submissionIds);
 	const seen = new Set<string>();
 	const found = new Set<string>();
