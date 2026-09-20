@@ -91,6 +91,24 @@ test("reviewed Tally IDs exclude unreviewed records and guardian addresses, pres
 	assert.equal((await resolveAudience(source, "fixture", request(page([submission("one"), submission("two", "Sam")]))))![0].name, "");
 });
 
+test("incomplete Tally audience includes old partials and excludes completed or recent addresses", async () => {
+	const old = new Date(now - 25 * 60 * 60 * 1000).toISOString();
+	const recent = new Date(now - 2 * 60 * 60 * 1000).toISOString();
+	const partial = (id: string, email: string, submittedAt: string) => ({
+		id, isCompleted: false, submittedAt,
+		responses: [{ questionId: "en", answer: email, updatedAt: submittedAt }],
+	});
+	const completed = { ...submission("done"), submittedAt: old,
+		responses: [{ questionId: "en", answer: "completed@example.com", updatedAt: old }] };
+	const source = parseCampaign(JSON.stringify({ ...fixture,
+		audience: { type: "tally-incomplete", formId: "form", inactiveHours: 24 }, expected: undefined })).audience;
+	const result = await resolveAudience(source, "fixture", request(page([
+		partial("old", "partial@example.com", old), partial("recent", "recent@example.com", recent),
+		partial("before-done", "completed@example.com", old), completed,
+	])), now);
+	assert.deepEqual(result, [{ email: "partial@example.com", language: "en", name: "" }]);
+});
+
 test("Tally preflight fails closed for missing, partial, ambiguous and repeated records", async () => {
 	const source = parseCampaign(raw).audience;
 	await assert.rejects(resolveAudience(source, "fixture", request(page([submission("one")]))));

@@ -7,6 +7,10 @@ const source = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("subscribers") }).strict(),
 	z.object({ type: z.literal("csv"), data: z.string().min(1), encoding: z.enum(["utf8", "gzip-base64"]).default("utf8") }).strict(),
 	z.object({
+		type: z.literal("tally-incomplete"), formId: z.string().regex(/^[A-Za-z0-9]+$/),
+		inactiveHours: z.number().int().min(1).max(24 * 30).default(24),
+	}).strict(),
+	z.object({
 		type: z.literal("tally-reviewed"), formId: z.string().regex(/^[A-Za-z0-9]+$/),
 		submissionIds: z.array(z.string().regex(/^[A-Za-z0-9]+$/)).min(1).max(10_000)
 			.refine(ids => new Set(ids).size === ids.length),
