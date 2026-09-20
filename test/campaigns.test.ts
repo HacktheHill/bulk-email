@@ -102,11 +102,13 @@ test("incomplete Tally audience includes old partials and excludes completed or 
 		responses: [{ questionId: "en", answer: "completed@example.com", updatedAt: old }] };
 	const source = parseCampaign(JSON.stringify({ ...fixture,
 		audience: { type: "tally-incomplete", formId: "form", inactiveHours: 24 }, expected: undefined })).audience;
+	let exclusions: string[] = [];
 	const result = await resolveAudience(source, "fixture", request(page([
 		partial("old", "partial@example.com", old), partial("recent", "recent@example.com", recent),
 		partial("before-done", "completed@example.com", old), completed,
-	])), now);
+	])), now, emails => { exclusions = emails; });
 	assert.deepEqual(result, [{ email: "partial@example.com", language: "en", name: "" }]);
+	assert.deepEqual(exclusions, ["completed@example.com"]);
 });
 
 test("Tally preflight fails closed for missing, partial, ambiguous and repeated records", async () => {

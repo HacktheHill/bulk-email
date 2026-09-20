@@ -74,7 +74,9 @@ export async function runConfiguredCampaign(raw: string, entry: QueueEntry, mode
 			return claimed;
 		},
 		preflight: async () => {
-			const recipients = await resolveAudience(config.audience, process.env.TALLY_API_KEY ?? "");
+			let completedExclusions: string[] | undefined;
+			const recipients = await resolveAudience(config.audience, process.env.TALLY_API_KEY ?? "", fetch, Date.now(),
+				emails => { completedExclusions = emails; });
 			await mkdir(".bulk-email", { recursive: true, mode: 0o700 });
 			if (recipients) {
 				verifyAudience(recipients, config.expected);
@@ -82,6 +84,12 @@ export async function runConfiguredCampaign(raw: string, entry: QueueEntry, mode
 				await writeFile(".bulk-email/audience.csv", recipientCsv(recipients), { mode: 0o600 });
 				sendArgs.push("--file", ".bulk-email/audience.csv");
 				console.info(`First-name greetings: ${recipients.filter(r => r.name).length}; neutral fallbacks: ${recipients.filter(r => !r.name).length}.`);
+			}
+			if (config.audience.type === "tally-incomplete") {
+				if (!completedExclusions) throw new Error("Completed Tally exclusions were not resolved");
+				await writeFile(".bulk-email/exclusions.csv", recipientCsv(completedExclusions.map(email => ({ email }))), { mode: 0o600 });
+				sendArgs.push("--exclude-file", ".bulk-email/exclusions.csv");
+				console.info(`Completed-applicant exclusions: ${completedExclusions.length}.`);
 			}
 			await cli([...sendArgs, "--dry-run"]);
 		},
