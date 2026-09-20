@@ -37,7 +37,8 @@ export function recipientCsv(rows: RecipientRecord[]): string {
 	return [keys.map(quote).join(","), ...rows.map(row => keys.map(key => quote(row[key])).join(","))].join("\n") + "\n";
 }
 
-export async function resolveAudience(source: CampaignConfig["audience"], token: string, request = fetch, now = Date.now()): Promise<RecipientRecord[] | undefined> {
+export async function resolveAudience(source: CampaignConfig["audience"], token: string, request = fetch, now = Date.now(),
+	onExclusions?: (emails: string[]) => void): Promise<RecipientRecord[] | undefined> {
 	if (source.type === "subscribers") return undefined; // The CLI owns the live export and marketing suppression policy.
 	if (source.type === "csv") {
 		const csv = source.encoding === "gzip-base64" ? gunzipSync(Buffer.from(source.data, "base64"), { maxOutputLength: 25 * 1024 * 1024 }).toString("utf8") : source.data;
@@ -61,7 +62,9 @@ export async function resolveAudience(source: CampaignConfig["audience"], token:
 				applicants.push(...parsed.applicants);
 				if (!data.hasMore) {
 					if (seen.size === 0) throw new Error();
-					return buildReminderAudiences(applicants, now, source.inactiveHours).incomplete
+					const audiences = buildReminderAudiences(applicants, now, source.inactiveHours);
+					onExclusions?.(audiences.completed);
+					return audiences.incomplete
 						.map(({ email, language }) => ({ email, language, name: "" }));
 				}
 				if (data.submissions.length === 0) throw new Error();
