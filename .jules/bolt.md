@@ -9,3 +9,6 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+## 2024-05-24 - Do not extract string search fast-paths before static regex checks
+**Learning:** When validating templates against regexes containing clear static literals like `/\{\{\s*[A-Za-z]/`, wrapping the check with an initial `String.prototype.includes` fast-path (e.g. `if (html.includes("{{"))`) does not provide a speed benefit and actually introduces overhead. Modern JavaScript engines like V8 already aggressively optimize and literal-prefix-scan static regular expressions under the hood.
+**Action:** Do not manually add `String.prototype.includes` string checks before a Regex if it already has a distinct, continuous literal prefix. Only rely on manual string fast-paths for complex Regexes that lack clear literals or present large backtracking hazards. However, continue to extract the `RegExp` literal into a module-level constant to prevent allocation overhead.
