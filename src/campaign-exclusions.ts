@@ -4,7 +4,8 @@ import { normalizeEmail } from "./utils.js";
 
 export function excludeCampaignRecipients(recipients: RecipientRecord[], exclusions: RecipientRecord[]) {
 	const excluded = new Set(exclusions.map(row => normalizeEmail(row.email)));
-	const pending = recipients.filter(row => !excluded.has(normalizeEmail(row.email)));
+	const hasExcluded = excluded.size > 0;
+	const pending = hasExcluded ? recipients.filter(row => !excluded.has(normalizeEmail(row.email))) : recipients;
 	return {
 		recipients: pending,
 		excludedRows: recipients.length - pending.length,
