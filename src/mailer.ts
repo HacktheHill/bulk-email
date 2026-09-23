@@ -110,8 +110,10 @@ export function isAmbiguousSesError(error: unknown): boolean {
 		|| AMBIGUOUS_NETWORK_ERROR_CODES.has(String(networkError.code ?? ""));
 }
 
+const PLACEHOLDER_REPLACE_REGEX = /\{\{\s*(\w+)\s*\}\}/g;
+
 export function applyPlaceholders(input: string, values: TemplateProps): string {
-	return input.replaceAll(/\{\{\s*(\w+)\s*\}\}/g, (_match, key: string) => {
+	return input.replaceAll(PLACEHOLDER_REPLACE_REGEX, (_match, key: string) => {
 		const value = values[key];
 		if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
 			throw new Error(`Template contains an unresolved placeholder: ${key}`);
