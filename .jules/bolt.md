@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-09-24 - Bypass string normalizations for empty Sets
+**Learning:** Email normalization (`normalizeEmail`) within large recipient loops allocates strings on every iteration. Filtering against often-empty Sets (like suppression lists) without checking `.size` first forces unnecessary string allocations.
+**Action:** When filtering arrays against Sets that may frequently be empty, extract `set.size > 0` checks to variables outside the iteration loop. Use these boolean variables inside the loop to fast-path (early-continue) and bypass expensive operations, like string normalizations, before executing `Set.has()`.
