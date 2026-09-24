@@ -48,7 +48,7 @@ The examples contain placeholders; `inspect` validates the real file before it c
 - `csv`: set `data` to CSV text and optionally `encoding` to `gzip-base64` for compressed CSV. Custom columns become template props, supporting RSVP IDs and other service-message fields. Decompression is bounded to 25 MiB. Treat IDs and links as private. The template must declare `provided-csv`.
 - `subscribers`: the existing CLI downloads the authenticated email-list-manager export, validates the expected count/digest and applies marketing suppression/unsubscribe rules. The template must declare `subscribers`. If the list changes after approval, sending stops for a refreshed preview and approval.
 
-`respectListSuppressions: true` additionally applies email-list-manager suppressions to service-message CSV/Tally campaigns. SES bounce/complaint suppression always applies. Expectations describe the unique audience before suppression; suppressions can reduce the actual send count. Templates requiring campaign-specific exclusion files still use the existing reminder workflow until their audience adapter is configured separately.
+`respectListSuppressions: true` additionally applies email-list-manager suppressions to service-message CSV/Tally campaigns. SES bounce/complaint suppression always applies. Expectations describe the unique audience before suppression; suppressions can reduce the actual send count. The `tally-incomplete` audience automatically excludes completed applicants.
 
 ## Send records and reconciliation
 
