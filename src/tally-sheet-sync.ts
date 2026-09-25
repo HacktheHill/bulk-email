@@ -20,6 +20,7 @@ const serviceAccountSchema = z.object({
 
 type ServiceAccount = z.infer<typeof serviceAccountSchema>;
 type SheetRow = { rowNumber: number; submissionId: string; decision: string };
+type AdmissionCells = { decision: string; walkIn: boolean };
 
 const DEFAULT_FORM_ID = "9qga9Q";
 const DEFAULT_SPREADSHEET_ID = "1PlJ04NM3YvzRiiIGsJo56zzdYeh38kukzImQ6asXc9w";
@@ -153,16 +154,18 @@ async function readSheetRows(token: string, spreadsheetId: string, sheetName: st
 	const ranges = [
 		`${quotedSheetName(sheetName)}!A:A`,
 		`${quotedSheetName(sheetName)}!GQ:GQ`,
+		`${quotedSheetName(sheetName)}!HB:HB`,
 	];
 	const query = new URLSearchParams({ majorDimension: "COLUMNS", valueRenderOption: "FORMATTED_VALUE" });
 	for (const range of ranges) query.append("ranges", range);
 	const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet?${query}`;
 	const data = z.object({ valueRanges: z.array(z.object({ values: z.array(z.array(z.unknown())).optional() })) }).parse(await googleRequest(token, url));
-	if (data.valueRanges.length !== 2) throw new Error("Google Sheets returned an unexpected range count");
+	if (data.valueRanges.length !== 3) throw new Error("Google Sheets returned an unexpected range count");
 	const ids = data.valueRanges[0].values?.[0] ?? [];
 	const decisions = data.valueRanges[1].values?.[0] ?? [];
-	if (ids[0] !== "Submission ID" || decisions[0] !== "Admission status") {
-		throw new Error("Responses headers changed; refusing to update admission decisions");
+	const walkIns = data.valueRanges[2].values?.[0] ?? [];
+	if (ids[0] !== "Submission ID" || decisions[0] !== "Admission status" || walkIns[0] !== "Walk-In") {
+		throw new Error("Responses headers changed; refusing to update admissions or walk-in status");
 	}
 	return ids.slice(1).map((value, index) => {
 		const decision = decisions[index + 1];
@@ -174,27 +177,37 @@ async function readSheetRows(token: string, spreadsheetId: string, sheetName: st
 	});
 }
 
-async function readDecisionCells(token: string, spreadsheetId: string, sheetName: string, rowNumbers: number[]) {
-	if (rowNumbers.length === 0) return new Map<number, string>();
+async function readAdmissionCells(token: string, spreadsheetId: string, sheetName: string, rowNumbers: number[]) {
+	if (rowNumbers.length === 0) return new Map<number, AdmissionCells>();
 	const query = new URLSearchParams({ valueRenderOption: "FORMATTED_VALUE" });
-	for (const rowNumber of rowNumbers) query.append("ranges", `${quotedSheetName(sheetName)}!GQ${rowNumber}`);
+	for (const rowNumber of rowNumbers) {
+		query.append("ranges", `${quotedSheetName(sheetName)}!GQ${rowNumber}`);
+		query.append("ranges", `${quotedSheetName(sheetName)}!HB${rowNumber}`);
+	}
 	const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchGet?${query}`;
 	const data = z.object({ valueRanges: z.array(z.object({ values: z.array(z.array(z.unknown())).optional() })) }).parse(await googleRequest(token, url));
-	if (data.valueRanges.length !== rowNumbers.length) throw new Error("Google Sheets returned an unexpected decision range count");
+	if (data.valueRanges.length !== rowNumbers.length * 2) throw new Error("Google Sheets returned an unexpected admission range count");
 	return new Map(rowNumbers.map((rowNumber, index) => {
-		const value = data.valueRanges[index].values?.[0]?.[0];
-		return [rowNumber, typeof value === "string" ? value.trim() : ""];
+		const decision = data.valueRanges[index * 2].values?.[0]?.[0];
+		const walkIn = data.valueRanges[index * 2 + 1].values?.[0]?.[0];
+		return [rowNumber, {
+			decision: typeof decision === "string" ? decision.trim() : "",
+			walkIn: walkIn === true || (typeof walkIn === "string" && walkIn.trim().toUpperCase() === "TRUE"),
+		}];
 	}));
 }
 
-async function writeAccepted(token: string, spreadsheetId: string, sheetName: string, rowNumbers: number[]): Promise<void> {
-	if (rowNumbers.length === 0) return;
+async function writeAdmissions(token: string, spreadsheetId: string, sheetName: string, acceptedRows: number[], walkInRows: number[]): Promise<void> {
+	if (acceptedRows.length === 0 && walkInRows.length === 0) return;
 	const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values:batchUpdate`;
 	await googleRequest(token, url, {
 		method: "POST",
 		body: JSON.stringify({
 			valueInputOption: "USER_ENTERED",
-			data: rowNumbers.map(rowNumber => ({ range: `${quotedSheetName(sheetName)}!GQ${rowNumber}`, values: [[ACCEPTED]] })),
+			data: [
+				...acceptedRows.map(rowNumber => ({ range: `${quotedSheetName(sheetName)}!GQ${rowNumber}`, values: [[ACCEPTED]] })),
+				...walkInRows.map(rowNumber => ({ range: `${quotedSheetName(sheetName)}!HB${rowNumber}`, values: [[true]] })),
+			],
 		}),
 	});
 }
@@ -209,13 +222,17 @@ export async function runSyncCycle(options: { dryRun: boolean }): Promise<void> 
 	const rows = await readSheetRows(googleToken, spreadsheetId, sheetName);
 	const plan = collectDecisionUpdates(completedIds, rows);
 
-	const actionTimeValues = await readDecisionCells(googleToken, spreadsheetId, sheetName, plan.updates.map(row => row.rowNumber));
-	const stillBlank = plan.updates.filter(row => actionTimeValues.get(row.rowNumber) === "");
+	const admissionCandidateRows = plan.updates.map(row => row.rowNumber);
+	const actionTimeValues = await readAdmissionCells(googleToken, spreadsheetId, sheetName, admissionCandidateRows);
+	const stillBlank = plan.updates.filter(row => actionTimeValues.get(row.rowNumber)?.decision === "");
+	const acceptedRows = new Set(stillBlank.map(row => row.rowNumber));
+	const walkInRows = [...acceptedRows];
 	if (!options.dryRun) {
-		await writeAccepted(googleToken, spreadsheetId, sheetName, stillBlank.map(row => row.rowNumber));
-		const verified = await readDecisionCells(googleToken, spreadsheetId, sheetName, stillBlank.map(row => row.rowNumber));
-		if (stillBlank.some(row => verified.get(row.rowNumber) !== ACCEPTED)) {
-			throw new Error("Google Sheets verification failed after admission updates");
+		await writeAdmissions(googleToken, spreadsheetId, sheetName, [...acceptedRows], walkInRows);
+		const verified = await readAdmissionCells(googleToken, spreadsheetId, sheetName, admissionCandidateRows);
+		if (stillBlank.some(row => verified.get(row.rowNumber)?.decision !== ACCEPTED)
+			|| walkInRows.some(rowNumber => !verified.get(rowNumber)?.walkIn)) {
+			throw new Error("Google Sheets verification failed after admission or walk-in updates");
 		}
 	}
 	console.log(JSON.stringify({
@@ -225,6 +242,8 @@ export async function runSyncCycle(options: { dryRun: boolean }): Promise<void> 
 		sheetSubmissionRows: rows.filter(row => row.submissionId).length,
 		acceptedBlankDecisions: options.dryRun ? 0 : stillBlank.length,
 		wouldAcceptBlankDecisions: options.dryRun ? stillBlank.length : 0,
+		markedWalkIns: options.dryRun ? 0 : walkInRows.length,
+		wouldMarkWalkIns: options.dryRun ? walkInRows.length : 0,
 		preservedConcurrentDecisions: plan.updates.length - stillBlank.length,
 		pendingNativeTallyRows: plan.pendingSubmissionIds.length,
 	}));

@@ -118,7 +118,7 @@ Set `TEMPLATES_REPO_TOKEN` to a read-only token that can check out `HacktheHill/
 
 ### Tally-to-Sheets admission sync
 
-`npm run sync:tally-sheets` polls the Tally API every five minutes, treats only completed submissions as eligible, and writes `Accepted` only to blank `Responses!GQ` admission cells. Existing decisions are preserved. Tally's native Google Sheets integration remains responsible for appending the full response row; a completed Tally submission that has not reached the Sheet is reported as pending and retried on the next cycle.
+`npm run sync:tally-sheets` polls the Tally API every five minutes, treats only completed submissions as eligible, writes `Accepted` only to blank `Responses!GQ` admission cells, and marks only those newly accepted rows as walk-ins in `Responses!HB`. Existing decisions and their walk-in values are preserved. Tally's native Google Sheets integration remains responsible for appending the full response row; a completed Tally submission that has not reached the Sheet is reported as pending and retried on the next cycle.
 
 Required environment variables:
 
