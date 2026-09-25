@@ -116,4 +116,17 @@ UNSUBSCRIBE_TOKEN_KEYS
 
 Set `TEMPLATES_REPO_TOKEN` to a read-only token that can check out `HacktheHill/react-email-templates`. The `production` environment remains available for additional human approval requirements. `TALLY_API_KEY` is needed only for reviewed Tally audiences.
 
+### Tally-to-Sheets admission sync
+
+`npm run sync:tally-sheets` polls the Tally API every five minutes, treats only completed submissions as eligible, and writes `Accepted` only to blank `Responses!GQ` admission cells. Existing decisions are preserved. Tally's native Google Sheets integration remains responsible for appending the full response row; a completed Tally submission that has not reached the Sheet is reported as pending and retried on the next cycle.
+
+Required environment variables:
+
+- `TALLY_API_KEY`
+- either `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS`
+
+The Google service account needs Sheets edit access to spreadsheet `1PlJ04NM3YvzRiiIGsJo56zzdYeh38kukzImQ6asXc9w`. Optional overrides are `TALLY_FORM_ID`, `GOOGLE_SPREADSHEET_ID`, `GOOGLE_SHEET_NAME`, and `SYNC_INTERVAL_SECONDS`.
+
+Run one non-writing validation cycle with `npm run sync:tally-sheets -- --dry-run`. Run one live cycle with `npm run sync:tally-sheets -- --once`. Without either flag, the process continues until it receives `SIGINT` or `SIGTERM`.
+
 The older `send-campaign.yml` remains compatible with existing callers and one-off tests, including an optional `test_name`. It does not use the configured-campaign ledger; do not use it to resend a campaign managed by **Campaigns**.

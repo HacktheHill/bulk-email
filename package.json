@@ -32,7 +32,8 @@
 		"lint": "eslint src test",
 		"audit:prod": "npm audit --omit=dev --audit-level=high",
 		"verify": "npm run lint && npm run typecheck && npm test && npm run build && npm run audit:prod && npm audit --audit-level=high",
-		"verify-unsub-token": "tsx src/verify-unsubscribe-token.ts"
+		"verify-unsub-token": "tsx src/verify-unsubscribe-token.ts",
+		"sync:tally-sheets": "tsx src/tally-sheet-sync.ts"
 	},
 	"bin": "dist/app.js",
 	"dependencies": {
