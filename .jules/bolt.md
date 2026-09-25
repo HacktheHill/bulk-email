@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-05-24 - Early Set Membership Checks
+**Learning:** Checking membership in `Set` instances with short-circuiting logic like `set.size > 0 && set.has(...)` improves performance significantly in high-throughput data processing contexts, avoiding the overhead of generating properties like hashes before a `has` lookup if the `Set` is entirely empty.
+**Action:** When evaluating membership in a Set, implement an explicit early short-circuit check on `Set.size > 0` prior to evaluating conditions like `has` logic that have high time complexity overhead.

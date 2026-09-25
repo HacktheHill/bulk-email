@@ -64,18 +64,20 @@ export function buildReminderAudiences(applicants: Applicant[], now = Date.now()
 	const inactiveMilliseconds = inactiveHours * 60 * 60 * 1000;
 	const completed = new Set(applicants.filter(a => a.completed).map(a => normalizeEmail(a.email)));
 	const partial = new Map<string, Applicant>();
+	const hasCompleted = completed.size > 0;
 	for (const row of applicants.filter(a => !a.completed)) {
 		const email = normalizeEmail(row.email);
 		if (!partial.has(email) || partial.get(email)!.updatedAt < row.updatedAt) partial.set(email, { ...row, email });
 	}
-	const incomplete = [...partial.values()].filter(a => !completed.has(a.email) && now - a.updatedAt >= inactiveMilliseconds);
+	// ⚡ Bolt: Fast-path completed lookup to avoid unnecessary Set.has checks
+	const incomplete = [...partial.values()].filter(a => !(hasCompleted && completed.has(a.email)) && now - a.updatedAt >= inactiveMilliseconds);
 	return {
 		completed: [...completed].sort(),
 		generalExclusions: [...new Set([...completed, ...partial.keys()])].sort(),
 		incomplete: incomplete.sort((a, b) => a.email.localeCompare(b.email)),
 		counts: { completed: completed.size, partialEmails: partial.size,
-			partialAlreadyCompleted: [...partial.keys()].filter(e => completed.has(e)).length,
-			partialTooRecent: [...partial.values()].filter(a => !completed.has(a.email) && now - a.updatedAt < inactiveMilliseconds).length,
+			partialAlreadyCompleted: [...partial.keys()].filter(e => hasCompleted && completed.has(e)).length,
+			partialTooRecent: [...partial.values()].filter(a => !(hasCompleted && completed.has(a.email)) && now - a.updatedAt < inactiveMilliseconds).length,
 			incomplete: incomplete.length },
 	};
 }
