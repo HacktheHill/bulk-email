@@ -427,10 +427,18 @@ function filterRecipients(
 	let listSuppressed = 0;
 	let sesSuppressed = 0;
 	const hasAccepted = accepted.size > 0;
+	const hasSesSuppressions = sesSuppressions.size > 0;
+	const hasListSuppressions = listSuppressions.size > 0;
+	// ⚡ Bolt: Fast-path empty filter checking to avoid O(N) normalizeEmail allocation overhead
+	const hasAnyFilters = hasSesSuppressions || hasListSuppressions || hasAccepted;
 	for (const recipient of recipients) {
+		if (!hasAnyFilters) {
+			pending.push(recipient);
+			continue;
+		}
 		const normalized = normalizeEmail(recipient.email);
-		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
-		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		if (hasSesSuppressions && sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
+		if (hasListSuppressions && listSuppressions.has(normalized)) { listSuppressed++; continue; }
 		if (hasAccepted && accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		pending.push(recipient);
 	}
@@ -455,8 +463,10 @@ async function deliverCampaign(input: {
 		const latestListSuppressions = input.refreshListSuppressions && offset > 0
 			? await input.refreshListSuppressions()
 			: new Set<string>();
+		const hasLatestListSuppressions = latestListSuppressions.size > 0;
+		// ⚡ Bolt: Skip normalizeEmail allocation if the list suppressions set is empty
 		const batch = input.messages.slice(offset, offset + input.options.batchSize).filter(message => {
-			if (latestListSuppressions.has(normalizeEmail(message.email))) { suppressed++; return false; }
+			if (hasLatestListSuppressions && latestListSuppressions.has(normalizeEmail(message.email))) { suppressed++; return false; }
 			return true;
 		});
 		await processWithConcurrency(batch, input.options.concurrency, async (message, signal) => {
