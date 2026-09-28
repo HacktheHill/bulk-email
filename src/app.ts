@@ -427,10 +427,19 @@ function filterRecipients(
 	let listSuppressed = 0;
 	let sesSuppressed = 0;
 	const hasAccepted = accepted.size > 0;
+	const hasSes = sesSuppressions.size > 0;
+	const hasList = listSuppressions.size > 0;
+	const hasAny = hasAccepted || hasSes || hasList;
+
+	// Fast path: bypass O(N) string allocations (normalizeEmail) if no filters apply
+	if (!hasAny) {
+		return { pending: [...recipients], alreadyAccepted: 0, suppressed: 0, listSuppressed: 0, sesSuppressed: 0 };
+	}
+
 	for (const recipient of recipients) {
 		const normalized = normalizeEmail(recipient.email);
-		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
-		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		if (hasSes && sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
+		if (hasList && listSuppressions.has(normalized)) { listSuppressed++; continue; }
 		if (hasAccepted && accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		pending.push(recipient);
 	}
