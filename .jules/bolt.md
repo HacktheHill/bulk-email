@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-08-22 - Early String Allocation Avoidance
+**Learning:** Normalizing strings or calling other allocating functions within loops before performing lookups in `Set` instances causes unnecessary memory churn and overhead if the `Set` is completely empty.
+**Action:** When filtering or matching against a `Set` that is frequently empty, check `set.size > 0` before running mapping/normalization functions on items that are guaranteed not to match.
