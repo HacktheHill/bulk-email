@@ -68,14 +68,15 @@ export function buildReminderAudiences(applicants: Applicant[], now = Date.now()
 		const email = normalizeEmail(row.email);
 		if (!partial.has(email) || partial.get(email)!.updatedAt < row.updatedAt) partial.set(email, { ...row, email });
 	}
-	const incomplete = [...partial.values()].filter(a => !completed.has(a.email) && now - a.updatedAt >= inactiveMilliseconds);
+	const hasCompleted = completed.size > 0;
+	const incomplete = [...partial.values()].filter(a => !(hasCompleted && completed.has(a.email)) && now - a.updatedAt >= inactiveMilliseconds);
 	return {
 		completed: [...completed].sort(),
 		generalExclusions: [...new Set([...completed, ...partial.keys()])].sort(),
 		incomplete: incomplete.sort((a, b) => a.email.localeCompare(b.email)),
 		counts: { completed: completed.size, partialEmails: partial.size,
-			partialAlreadyCompleted: [...partial.keys()].filter(e => completed.has(e)).length,
-			partialTooRecent: [...partial.values()].filter(a => !completed.has(a.email) && now - a.updatedAt < inactiveMilliseconds).length,
+			partialAlreadyCompleted: hasCompleted ? [...partial.keys()].filter(e => completed.has(e)).length : 0,
+			partialTooRecent: [...partial.values()].filter(a => !(hasCompleted && completed.has(a.email)) && now - a.updatedAt < inactiveMilliseconds).length,
 			incomplete: incomplete.length },
 	};
 }

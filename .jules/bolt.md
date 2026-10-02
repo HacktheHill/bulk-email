@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-10-02 - Early return for Empty Set iteration
+**Learning:** Checking `Set.has` continuously inside large array iterations is slow if the `Set` is completely empty.
+**Action:** When filtering array items against a `Set`, early-continue/return by checking `set.size > 0 && set.has(...)` to bypass the call overhead.
