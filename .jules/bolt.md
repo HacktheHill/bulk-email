@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2026-10-05 - Short-circuit string operations on empty sets
+**Learning:** Normalizing strings for dictionary or set lookups is an expensive O(N) allocation cost. When filtering arrays against dynamic `Set`s that are often empty, we do the expensive string normalization for every item just to check it against an empty structure.
+**Action:** Always capture `set.size > 0` into a boolean outside the loop and use it to short-circuit the condition (`hasItems && set.has(normalize(item))`), saving thousands of memory allocations and garbage collections.
