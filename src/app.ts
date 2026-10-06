@@ -427,10 +427,18 @@ function filterRecipients(
 	let listSuppressed = 0;
 	let sesSuppressed = 0;
 	const hasAccepted = accepted.size > 0;
+	const hasSesSuppressions = sesSuppressions.size > 0;
+	const hasListSuppressions = listSuppressions.size > 0;
+	const hasAnyFilters = hasAccepted || hasSesSuppressions || hasListSuppressions;
+
+	if (!hasAnyFilters) {
+		return { pending: recipients.slice(), alreadyAccepted, suppressed: 0, listSuppressed, sesSuppressed };
+	}
+
 	for (const recipient of recipients) {
 		const normalized = normalizeEmail(recipient.email);
-		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
-		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		if (hasSesSuppressions && sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
+		if (hasListSuppressions && listSuppressions.has(normalized)) { listSuppressed++; continue; }
 		if (hasAccepted && accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		pending.push(recipient);
 	}

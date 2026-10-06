@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-10-06 - Fast-path empty Sets to avoid string allocation
+**Learning:** Checking `set.size > 0` prior to iterating or inside a loop can skip expensive operations like string normalizations (`normalizeEmail`) and allocations.
+**Action:** When filtering arrays against Sets that may frequently be empty, extract `set.size > 0` checks to boolean variables outside the iteration loop, and use these boolean variables to early-continue or bypass operations before executing `Set.has()`.
