@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2026-08-22 - Bypass normalization and allocation for empty Sets
+**Learning:** Operations like `normalizeEmail()` or `new Set()` create overhead when filtering arrays. If the exclusion/suppression sets are empty (e.g. `set.size === 0` or `array.length === 0`), executing these operations is wasted work.
+**Action:** Add fast-paths outside loops to check for emptiness (`.length === 0` or `.size === 0`) and early return or bypass operations like normalization, hashing, and set instantiation entirely when there's nothing to exclude.
