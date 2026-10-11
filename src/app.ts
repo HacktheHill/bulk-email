@@ -422,11 +422,21 @@ function filterRecipients(
 	listSuppressions: ReadonlySet<string>,
 	sesSuppressions: ReadonlySet<string>,
 ): { pending: RecipientRecord[]; alreadyAccepted: number; suppressed: number; listSuppressed: number; sesSuppressed: number } {
+	// ⚡ Bolt: Fast-path empty suppression sets to bypass O(N) array iteration and normalization.
+	// Expected impact: Skips ~1M loop iterations and string allocations for clean subscriber lists.
+	const hasAccepted = accepted.size > 0;
+	const hasSes = sesSuppressions.size > 0;
+	const hasList = listSuppressions.size > 0;
+
+	if (!hasAccepted && !hasSes && !hasList) {
+		return { pending: [...recipients], alreadyAccepted: 0, suppressed: 0, listSuppressed: 0, sesSuppressed: 0 };
+	}
+
 	const pending: RecipientRecord[] = [];
 	let alreadyAccepted = 0;
 	let listSuppressed = 0;
 	let sesSuppressed = 0;
-	const hasAccepted = accepted.size > 0;
+
 	for (const recipient of recipients) {
 		const normalized = normalizeEmail(recipient.email);
 		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
