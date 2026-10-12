@@ -455,8 +455,9 @@ async function deliverCampaign(input: {
 		const latestListSuppressions = input.refreshListSuppressions && offset > 0
 			? await input.refreshListSuppressions()
 			: new Set<string>();
+		const hasSuppressions = latestListSuppressions.size > 0;
 		const batch = input.messages.slice(offset, offset + input.options.batchSize).filter(message => {
-			if (latestListSuppressions.has(normalizeEmail(message.email))) { suppressed++; return false; }
+			if (hasSuppressions && latestListSuppressions.has(normalizeEmail(message.email))) { suppressed++; return false; }
 			return true;
 		});
 		await processWithConcurrency(batch, input.options.concurrency, async (message, signal) => {
