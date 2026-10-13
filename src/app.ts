@@ -422,15 +422,22 @@ function filterRecipients(
 	listSuppressions: ReadonlySet<string>,
 	sesSuppressions: ReadonlySet<string>,
 ): { pending: RecipientRecord[]; alreadyAccepted: number; suppressed: number; listSuppressed: number; sesSuppressed: number } {
-	const pending: RecipientRecord[] = [];
 	let alreadyAccepted = 0;
 	let listSuppressed = 0;
 	let sesSuppressed = 0;
 	const hasAccepted = accepted.size > 0;
+	const hasSes = sesSuppressions.size > 0;
+	const hasList = listSuppressions.size > 0;
+
+	if (!hasAccepted && !hasSes && !hasList) {
+		return { pending: recipients, alreadyAccepted, suppressed: 0, listSuppressed, sesSuppressed };
+	}
+
+	const pending: RecipientRecord[] = [];
 	for (const recipient of recipients) {
 		const normalized = normalizeEmail(recipient.email);
-		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
-		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		if (hasSes && sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
+		if (hasList && listSuppressions.has(normalized)) { listSuppressed++; continue; }
 		if (hasAccepted && accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		pending.push(recipient);
 	}

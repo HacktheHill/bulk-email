@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2025-02-13 - Early Return Filtering
+**Learning:** Iterating over large datasets and normalizing fields solely to check against empty exclusion sets or arrays causes unnecessary string allocations and loop overhead.
+**Action:** Implement fast-path boolean checks (`set.size > 0`) outside of filtering loops and use early returns to bypass the loop entirely when all exclusion lists are empty.
