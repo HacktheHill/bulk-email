@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-05-18 - Early Array and Hash Returns for Empty Exclusion Sets
+**Learning:** Checking fast O(1) `Set` sizes before performing operations in a large array loop (e.g., iterating through thousands of recipients) or prior to allocating a new `Set` provides a significant performance gain. `Array.length === 0` and `Set.size === 0` are nearly instant.
+**Action:** When working with exclusion blocklists or acceptance sets that might frequently be empty, use early returns to bypass loop iteration or bypass expensive object allocations completely. If loops are necessary, extract `set.size > 0` conditions to variables outside the loop to bypass expensive logic inside.
