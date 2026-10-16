@@ -426,11 +426,14 @@ function filterRecipients(
 	let alreadyAccepted = 0;
 	let listSuppressed = 0;
 	let sesSuppressed = 0;
+	// Check if suppression sets are non-empty before checking membership to avoid overhead on empty sets
 	const hasAccepted = accepted.size > 0;
+	const hasSesSuppressions = sesSuppressions.size > 0;
+	const hasListSuppressions = listSuppressions.size > 0;
 	for (const recipient of recipients) {
 		const normalized = normalizeEmail(recipient.email);
-		if (sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
-		if (listSuppressions.has(normalized)) { listSuppressed++; continue; }
+		if (hasSesSuppressions && sesSuppressions.has(normalized)) { sesSuppressed++; continue; }
+		if (hasListSuppressions && listSuppressions.has(normalized)) { listSuppressed++; continue; }
 		if (hasAccepted && accepted.has(recipientDigest(normalized))) { alreadyAccepted++; continue; }
 		pending.push(recipient);
 	}
