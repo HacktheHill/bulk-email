@@ -9,3 +9,7 @@
 ## 2026-08-21 - Early Hash Return
 **Learning:** If you are evaluating membership in a `Set` by running an expensive crypto hash function on every element, check if the `Set` is completely empty first.
 **Action:** When a set may often be empty, skip iterating or hashing items against it by early returning or short-circuiting (`set.size > 0 && set.has(...)`).
+
+## 2024-03-22 - Fast-path for empty exclusions
+**Learning:** Checking for an empty exclusions list and returning early avoids allocating unnecessary Sets and filtering an array with an empty Set.
+**Action:** When working with exclusion or allowlist arrays that might frequently be empty, add an early return `length === 0` fast path before performing any initialization logic like creating sets and running iteration loops.
