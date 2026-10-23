@@ -3,6 +3,14 @@ import { type RecipientRecord } from "./recipients.js";
 import { normalizeEmail } from "./utils.js";
 
 export function excludeCampaignRecipients(recipients: RecipientRecord[], exclusions: RecipientRecord[]) {
+	if (exclusions.length === 0) {
+		// ⚡ Bolt: Early return for empty exclusions to avoid creating sets, iterating recipients, and dynamic hashing
+		return {
+			recipients,
+			excludedRows: 0,
+			exclusionsSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		};
+	}
 	const excluded = new Set(exclusions.map(row => normalizeEmail(row.email)));
 	const pending = recipients.filter(row => !excluded.has(normalizeEmail(row.email)));
 	return {
